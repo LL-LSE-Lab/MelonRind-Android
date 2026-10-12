@@ -122,6 +122,11 @@ bool HudRenderer::registerModule() {
     return mRegistered;
 }
 
+void HudRenderer::setModId(std::string modId) {
+    if (mRegistered || modId.empty()) return;
+    mModId = std::move(modId);
+}
+
 void HudRenderer::unregisterModule() noexcept {
     if (!mRegistered) return;
     clear();
@@ -164,7 +169,11 @@ std::vector<pl::modmenu::DrawCommand> HudRenderer::buildCommands(
     constexpr float contentWidthBase = 124.0f;
     constexpr float rowHeightBase = 14.0f;
     constexpr float iconSizeBase = 10.0f;
-    const float contentWidth = contentWidthBase * scale;
+    const float surfaceWidth = mSurfaceWidth;
+    const float contentWidth = surfaceWidth > 32.0f
+                                   ? std::min(contentWidthBase * scale,
+                                             surfaceWidth - 32.0f)
+                                   : contentWidthBase * scale;
     const float rowHeight = rowHeightBase * scale;
     const float iconSize = iconSizeBase * scale;
     const float alpha = mConfig.pulse
@@ -265,6 +274,8 @@ std::vector<pl::modmenu::DrawCommand> HudRenderer::buildCommands(
 
 void HudRenderer::render(const PlayerSnapshot &snapshot, float timeSeconds) {
     if (!mRegistered) return;
+    const auto surface = pl::modmenu::getHudSurfaceSize();
+    setSurfaceSize(surface.width, surface.height);
     if (!mConfig.enabled || !snapshot.hudVisible) {
         clear();
         return;

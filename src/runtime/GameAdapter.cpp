@@ -114,6 +114,8 @@ bool GameAdapter::install(std::string_view minecraftVersion) {
             set->hungerRendererType, set->hungerRenderSlot, set->moduleName);
         auto heart = pl::memory::resolveVtableFunction(
             set->heartRendererType, set->heartRenderSlot, set->moduleName);
+        mHungerRenderTarget = hunger;
+        mHeartRenderTarget = heart;
         if (hunger) {
             gActiveAdapter = this;
             mHungerRenderHook = pl::memory::HookHandle(
@@ -141,6 +143,8 @@ void GameAdapter::uninstall() noexcept {
     mSignatureSet = nullptr;
     mSnapshot.reset();
     mSnapshotCallback = {};
+    mHungerRenderTarget = 0;
+    mHeartRenderTarget = 0;
     mHungerRenderHook.reset();
     mHeartRenderHook.reset();
     if (gActiveAdapter == this) gActiveAdapter = nullptr;
@@ -156,6 +160,26 @@ bool GameAdapter::installed() const noexcept {
 bool GameAdapter::nativeReadsAvailable() const noexcept {
     std::shared_lock lock(mMutex);
     return mNativeReadsAvailable;
+}
+
+std::uintptr_t GameAdapter::hungerRenderTarget() const noexcept {
+    std::shared_lock lock(mMutex);
+    return mHungerRenderTarget;
+}
+
+std::uintptr_t GameAdapter::heartRenderTarget() const noexcept {
+    std::shared_lock lock(mMutex);
+    return mHeartRenderTarget;
+}
+
+bool GameAdapter::hungerHookInstalled() const noexcept {
+    std::shared_lock lock(mMutex);
+    return mHungerRenderHook.installed();
+}
+
+bool GameAdapter::heartHookInstalled() const noexcept {
+    std::shared_lock lock(mMutex);
+    return mHeartRenderHook.installed();
 }
 
 std::string GameAdapter::minecraftVersion() const {

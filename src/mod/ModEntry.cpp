@@ -6,6 +6,7 @@
 #include <pl/Mod.hpp>
 
 #include <cstdlib>
+#include <atomic>
 #include <exception>
 #include <mutex>
 #include <optional>
@@ -51,7 +52,14 @@ public:
             }
             mRenderer.setConfig(mConfig->value());
             mAdapter.setSnapshotCallback([this](const runtime::PlayerSnapshot &snapshot) {
-                if (mEnabled) mRenderer.render(snapshot);
+                if (mEnabled.load(std::memory_order_relaxed)) {
+                    if (!mLoggedSnapshot.exchange(true, std::memory_order_relaxed)) {
+                        mSelf.getLogger().info(
+                            "Received first player snapshot: player={:#x} hunger={} tick={}",
+                            snapshot.playerIdentity, snapshot.hunger, snapshot.tick);
+                    }
+                    mRenderer.render(snapshot);
+                }
             });
             mRenderer.setConfigChangedCallback([this](const runtime::Config &config) {
                 std::lock_guard lock(mMutex);
@@ -75,6 +83,9 @@ public:
 
     bool enable() noexcept {
         try {
+            mRenderer.setModId(mSelf.getId());
+            mSelf.getLogger().info("Enabling mod id={} version={}",
+                                   mSelf.getId(), mSelf.getVersion());
             auto version = requestedMinecraftVersion();
             if (!mAdapter.install(version)) {
                 mSelf.getLogger().warn(
@@ -88,12 +99,20 @@ public:
                     version);
             }
 
+            mSelf.getLogger().info(
+                "HUD targets: hunger={:#x} installed={} heart={:#x} installed={}",
+                mAdapter.hungerRenderTarget(), mAdapter.hungerHookInstalled(),
+                mAdapter.heartRenderTarget(), mAdapter.heartHookInstalled());
+
             if (!mRenderer.registerModule()) {
                 mAdapter.uninstall();
                 mSelf.getLogger().error("Failed to register Mod Menu HUD");
                 return false;
             }
-            mEnabled = true;
+            mSelf.getLogger().info("Registered Mod Menu module {} for mod id {}",
+                                   runtime::HudRenderer::kModuleId, mSelf.getId());
+            mLoggedSnapshot = false;
+            mEnabled.store(true, std::memory_order_relaxed);
             return true;
         } catch (const std::exception &error) {
             mSelf.getLogger().error("Enable exception: {}", error.what());
@@ -106,7 +125,8 @@ public:
 
     bool disable() noexcept {
         try {
-            mEnabled = false;
+            mEnabled.store(false, std::memory_order_relaxed);
+            mLoggedSnapshot = false;
             mRenderer.clear();
             mRenderer.unregisterModule();
             mAdapter.uninstall();
@@ -137,7 +157,8 @@ private:
     std::optional<pl::config::ConfigFile<runtime::Config>> mConfig;
     runtime::GameAdapter mAdapter;
     runtime::HudRenderer mRenderer;
-    bool mEnabled{};
+    std::atomic_bool mEnabled{};
+    std::atomic_bool mLoggedSnapshot{};
 };
 
 } // namespace

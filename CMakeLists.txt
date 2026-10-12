@@ -35,16 +35,17 @@ if(MELONRIND_BUILD_TESTS AND NOT ANDROID)
 endif()
 
 if(ANDROID)
-    # NDK r30's libc headers no longer expose malloc/free transitively from
-    # fmt/os.h. Include the C++ allocation declarations for the SDK's fmt
-    # dependency as well as this mod.
+    set(CMAKE_ANDROID_STL_TYPE c++_shared CACHE STRING "Android C++ runtime" FORCE)
+
+    # Keep the SDK's fmt dependency portable across Android NDK revisions;
+    # some libc header sets do not expose malloc/free transitively.
     add_compile_options(
         "$<$<COMPILE_LANGUAGE:CXX>:-include>"
         "$<$<COMPILE_LANGUAGE:CXX>:cstdlib>")
 
     set(PRELOADER_ANDROID_ROOT
         "${CMAKE_CURRENT_LIST_DIR}/third_party/preloader-android"
-        CACHE PATH "Path to preloader-android 0.2.2")
+        CACHE PATH "Path to the Preloader checkout matching the target launcher")
 
     if(NOT EXISTS "${PRELOADER_ANDROID_ROOT}/include/pl/Mod.hpp")
         message(FATAL_ERROR

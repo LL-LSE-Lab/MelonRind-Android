@@ -29,8 +29,8 @@ struct HudEditorElement {
 /**
  * Lightweight Mod Menu renderer for Android.  It only consumes copied
  * PlayerSnapshot values and submits public preloader DrawCommand primitives.
- * Position editing is exposed as data because preloader 0.2.2 has no native
- * HUD-editor callback; LeviLaunchroid's Java bridge can use editorElements().
+ * Position editing is exposed as data because the launcher owns the HUD editor;
+ * the renderer reads the current surface size from the public Preloader API.
  */
 class HudRenderer {
 public:
@@ -44,6 +44,7 @@ public:
 
     [[nodiscard]] bool registered() const noexcept { return mRegistered; }
     [[nodiscard]] const Config &config() const noexcept { return mConfig; }
+    void setModId(std::string modId);
     void setConfig(Config config) noexcept;
     void setConfigChangedCallback(std::function<void(const Config &)> callback);
 

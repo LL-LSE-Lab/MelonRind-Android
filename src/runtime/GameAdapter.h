@@ -29,6 +29,10 @@ public:
 
     [[nodiscard]] bool installed() const noexcept;
     [[nodiscard]] bool nativeReadsAvailable() const noexcept;
+    [[nodiscard]] std::uintptr_t hungerRenderTarget() const noexcept;
+    [[nodiscard]] std::uintptr_t heartRenderTarget() const noexcept;
+    [[nodiscard]] bool hungerHookInstalled() const noexcept;
+    [[nodiscard]] bool heartHookInstalled() const noexcept;
     [[nodiscard]] std::string minecraftVersion() const;
     [[nodiscard]] const SignatureSet *signatureSet() const noexcept;
 
@@ -61,6 +65,8 @@ private:
     std::function<void(const PlayerSnapshot &)> mSnapshotCallback;
     pl::memory::HookHandle mHungerRenderHook;
     pl::memory::HookHandle mHeartRenderHook;
+    std::uintptr_t mHungerRenderTarget{};
+    std::uintptr_t mHeartRenderTarget{};
     std::uint64_t mFrameCounter{};
 };
 
