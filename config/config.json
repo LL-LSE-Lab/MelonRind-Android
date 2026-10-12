@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "enabled": true,
+  "showSaturation": true,
+  "showFoodPreview": true,
+  "showRegeneration": true,
+  "pulse": true,
+  "opacity": 0.8,
+  "scale": 1.0,
+  "hudPosX": -20000.0,
+  "hudPosY": -10080.0,
+  "estimateUnknownRule": true,
+  "diagnostics": false,
+  "saturationCap": "HungerAfterEating"
+}

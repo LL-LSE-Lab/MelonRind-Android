@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MelonRind Android",
+  "description": "AppleSkin-like nutrition HUD for LeviLaunchroid.",
+  "type": "object",
+  "properties": {
+    "version": {"type": "integer", "const": 1, "readOnly": true},
+    "enabled": {"type": "boolean", "default": true},
+    "showSaturation": {"type": "boolean", "default": true},
+    "showFoodPreview": {"type": "boolean", "default": true},
+    "showRegeneration": {"type": "boolean", "default": true},
+    "pulse": {"type": "boolean", "default": true},
+    "opacity": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.8},
+    "scale": {"type": "number", "minimum": 0.5, "maximum": 3, "default": 1},
+    "hudPosX": {"type": "number", "default": -20000},
+    "hudPosY": {"type": "number", "default": -10080},
+    "estimateUnknownRule": {"type": "boolean", "default": true},
+    "diagnostics": {"type": "boolean", "default": false},
+    "saturationCap": {
+      "type": "string",
+      "enum": ["AttributeMaximum", "HungerAfterEating"],
+      "default": "HungerAfterEating"
+    }
+  },
+  "required": ["version"]
+}

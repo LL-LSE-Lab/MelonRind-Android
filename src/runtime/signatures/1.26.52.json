@@ -1,0 +1,17 @@
+{
+  "$schema": "./schema.json",
+  "schemaVersion": 1,
+  "minecraftVersion": "1.26.52",
+  "module": "libminecraftpe.so",
+  "architecture": "arm64-v8a",
+  "signatures": {
+    "frame": "",
+    "playerState": "",
+    "hunger": "",
+    "health": "",
+    "mainHandFood": "",
+    "attributeUpdate": ""
+  },
+  "hudVtables": {},
+  "notes": "Populate only after validating against the exact shipped ARM64 build. Empty entries disable native reads safely."
+}

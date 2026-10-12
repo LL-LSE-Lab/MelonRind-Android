@@ -1,0 +1,24 @@
+{
+  "$schema": "./schema.json",
+  "schemaVersion": 1,
+  "minecraftVersion": "1.26.51",
+  "module": "libminecraftpe.so",
+  "architecture": "arm64-v8a",
+  "apkSha256": "163E1DAB7A078790871AA4DBED18E7EA8510AB36941B246FB428228FB733D602",
+  "librarySha256": "B3BA0C9C5230D39B6921703255C9F375E0A1B221D9D3AC79D85A72B1790380E9",
+  "signatures": {
+    "frame": "",
+    "playerState": "",
+    "hunger": "",
+    "health": "",
+    "mainHandFood": "",
+    "attributeUpdate": ""
+  },
+  "hudVtables": {
+    "hungerRendererType": "17HudHungerRenderer",
+    "heartRendererType": "16HudHeartRenderer",
+    "hungerRenderSlot": 17,
+    "heartRenderSlot": 17
+  },
+  "notes": "Primary development target. Populate only after validating against the exact shipped ARM64 build."
+}

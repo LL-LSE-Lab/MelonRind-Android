@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://melonrind.dev/schemas/android-signatures.schema.json",
+  "title": "MelonRind Android ARM64 signature set",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "minecraftVersion", "module", "signatures"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "minecraftVersion": {
+      "type": "string",
+      "pattern": "^1\\.26\\.(50|51|52)(\\.[0-9]+)?$"
+    },
+    "module": { "type": "string", "const": "libminecraftpe.so" },
+    "architecture": { "type": "string", "const": "arm64-v8a" },
+    "apkSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+    "librarySha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+    "signatures": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frame", "playerState", "hunger", "health", "mainHandFood", "attributeUpdate"],
+      "properties": {
+        "frame": { "type": "string" },
+        "playerState": { "type": "string" },
+        "hunger": { "type": "string" },
+        "health": { "type": "string" },
+        "mainHandFood": { "type": "string" },
+        "attributeUpdate": { "type": "string" }
+      }
+    },
+    "hudVtables": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "hungerRendererType": {"type": "string"},
+        "heartRendererType": {"type": "string"},
+        "hungerRenderSlot": {"type": "integer", "minimum": 0},
+        "heartRenderSlot": {"type": "integer", "minimum": 0}
+      }
+    },
+    "notes": { "type": "string" }
+  }
+}
