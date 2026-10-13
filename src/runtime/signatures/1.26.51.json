@@ -40,6 +40,10 @@
     "foodAlwaysEatSlot": 4,
     "packetPayloadOffset": "0x30",
     "attributeStride": "0x58",
+    "hungerIconPositionOffset": "0xfb8",
+    "hungerIconCount": 10,
+    "hungerIconStride": "0xc",
+    "heartIconVectorOffset": "0x3498",
     "hungerRenderRva": "0x9673048",
     "attributePacketCompleteDtorRva": "0xcf55560",
     "attributePacketDeletingDtorRva": "0xcf555d4"

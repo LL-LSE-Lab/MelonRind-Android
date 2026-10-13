@@ -1,6 +1,9 @@
+#include "model/HudTransform.h"
+#include "model/Markers.h"
 #include "model/Preview.h"
 #include "model/SaturationObservation.h"
 
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -81,5 +84,51 @@ int main() {
             if (h < 18) check(regen->highHp == 0, "below threshold never heals");
         }
     }
+    std::array<MarkerPoint, 4> rawPoints{MarkerPoint{40, 300}, MarkerPoint{-10001, 20},
+                                         MarkerPoint{nan, 30}, MarkerPoint{50, 1e6f}};
+    auto markers = usableMarkerPoints(rawPoints, 8000.0f);
+    check(markers.size() == 1 && markers[0].x == 40 && markers[0].y == 300,
+          "calibration markers drop sentinel, non-finite and oversized origins");
+    std::array<MarkerPoint, 3> orderedPoints{MarkerPoint{1, 2}, MarkerPoint{3, 4},
+                                             MarkerPoint{5, 6}};
+    markers = usableMarkerPoints(orderedPoints, 8000.0f);
+    check(markers.size() == 3 && markers[2].x == 5 && markers[2].y == 6,
+          "accepted origins keep their order and values");
+    check(usableMarkerPoints(orderedPoints, 0.0f).empty(),
+          "non-positive coordinate limit rejects every origin");
+
+    // Both rows come from the on-device calibration runs: the same client at a
+    // 100% and at an 83% UI scale, over a 3168x1440 overlay.  The icon pitch in
+    // the screenshots was 48 px and 40 px for 8-unit spacing, i.e. 6 and 5
+    // pixels per unit.
+    HudCalibrationInput full{};
+    full.hungerOrigin = full.heartOrigin = true;
+    full.hungerX = 364;
+    full.hungerY = 199;
+    full.heartX = 163;
+    full.heartY = 199;
+    full.surfaceWidth = 3168;
+    full.surfaceHeight = 1440;
+    auto scale = estimateHudUnitScale(full);
+    check(scale.valid && scale.consistent && near(scale.combined, 6.0f),
+          "calibration recovers the measured 6.0 px/unit at 100% UI scale");
+    check(near(scale.fromWidth, 6.0f) && near(scale.fromHeight, 6.0f),
+          "both calibration baselines agree at 100% UI scale");
+    HudCalibrationInput scaled = full;
+    scaled.hungerX = 417;
+    scaled.heartX = 216;
+    scaled.hungerY = scaled.heartY = 247;
+    scale = estimateHudUnitScale(scaled);
+    check(scale.valid && scale.consistent && scale.combined > 4.98f &&
+              scale.combined < 5.01f,
+          "calibration tracks the UI scale change to 5.0 px/unit");
+    HudCalibrationInput missing = full;
+    missing.heartOrigin = false;
+    check(!estimateHudUnitScale(missing).valid,
+          "calibration needs both bar origins");
+    HudCalibrationInput degenerate = full;
+    degenerate.surfaceHeight = nan;
+    check(!estimateHudUnitScale(degenerate).valid,
+          "calibration rejects a non-finite surface size");
     std::cout << "Passed " << checks << " checks\n";
 }

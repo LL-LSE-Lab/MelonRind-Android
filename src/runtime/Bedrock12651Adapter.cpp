@@ -84,6 +84,15 @@ struct SharedPtrAbi {
     void *control{};
 };
 
+/** sizeof(::glm::vec3) on the validated ARM64 build, in bytes. */
+constexpr std::size_t kIconStride = 12;
+/**
+ * Sanity ceiling for the heart icon vector.  The vanilla bar is drawn from at
+ * most `ceil(maxHealth / 2)` slots, and the model accepts up to 2000 health, so
+ * 1000 elements is the largest layout the rest of the code can consume.
+ */
+constexpr std::size_t kMaxHeartIconBytes = 1000 * kIconStride;
+
 [[nodiscard]] std::string readGameString(void const *address) noexcept {
     // libc++ (default ABI, little endian) lays out std::string as
     //   __short { uchar __is_long_:1, __size_:7; char __data_[23]; }
@@ -189,6 +198,150 @@ bool Bedrock12651Adapter::readHealth(void *renderer, float &value,
     maximum = static_cast<float>(background * 2U);
     value = static_cast<float>(full * 2U + half);
     return maximum > 0.0f && value <= maximum;
+}
+
+std::uint32_t Bedrock12651Adapter::readHungerIcons(
+    void *renderer, IconPosition *out, std::uint32_t capacity) const noexcept {
+    if (!renderer || !out || capacity == 0) return 0;
+    const auto count = static_cast<std::uint32_t>(mSet.hungerIconCount);
+    const auto stride = static_cast<std::uint32_t>(mSet.hungerIconStride);
+    if (count == 0 || stride < kIconStride) return 0;
+    auto const *base = static_cast<std::byte const *>(renderer) +
+                       mSet.hungerIconPositionOffset;
+    // The whole array is validated before anything is copied: the renderer
+    // fills it in an update step, so a partially plausible array means the
+    // object we are looking at is not the layout the catalog describes.
+    if (!readable(base, static_cast<std::size_t>(count) * stride)) return 0;
+    const auto limit = std::min(count, capacity);
+    std::uint32_t written = 0;
+    for (std::uint32_t index = 0; index < limit; ++index) {
+        auto const element = static_cast<std::size_t>(index) * stride;
+        IconPosition icon;
+        icon.x = load<float>(base, element + 0);
+        icon.y = load<float>(base, element + 4);
+        icon.z = load<float>(base, element + 8);
+        if (!std::isfinite(icon.x) || !std::isfinite(icon.y)) return 0;
+        out[written++] = icon;
+    }
+    return written;
+}
+
+std::uint32_t Bedrock12651Adapter::readHeartIcons(
+    void *renderer, IconPosition *out, std::uint32_t capacity,
+    std::uint32_t *total) const noexcept {
+    if (total) *total = 0;
+    if (!renderer || !out || capacity == 0) return 0;
+    auto const *vector = static_cast<std::byte const *>(renderer) +
+                         mSet.heartIconVectorOffset;
+    if (!readable(vector, sizeof(SharedVector))) return 0;
+    // `std::vector<::glm::vec3>`: three words, the second being the end.  The
+    // icon count is derived from the byte size so a reallocated or empty vector
+    // (which the renderer legitimately produces while the bar is hidden) cannot
+    // be misread as icon data.
+    SharedVector entries = load<SharedVector>(vector, 0);
+    if (!entries.begin || !entries.end || entries.end < entries.begin) return 0;
+    const auto bytes = static_cast<std::size_t>(entries.end - entries.begin);
+    if (bytes == 0 || bytes % kIconStride != 0 ||
+        bytes > kMaxHeartIconBytes) {
+        return 0;
+    }
+    if (!readable(entries.begin, bytes)) return 0;
+    const auto count = static_cast<std::uint32_t>(bytes / kIconStride);
+    if (total) *total = count;
+    const auto limit = std::min(count, capacity);
+    std::uint32_t written = 0;
+    for (std::uint32_t index = 0; index < limit; ++index) {
+        auto const element = static_cast<std::size_t>(index) * kIconStride;
+        IconPosition icon;
+        icon.x = load<float>(entries.begin, element + 0);
+        icon.y = load<float>(entries.begin, element + 4);
+        icon.z = load<float>(entries.begin, element + 8);
+        if (!std::isfinite(icon.x) || !std::isfinite(icon.y)) {
+            if (total) *total = 0;
+            return 0;
+        }
+        out[written++] = icon;
+    }
+    return written;
+}
+
+bool Bedrock12651Adapter::readHudOwnerOrigin(void *owner, float &x,
+                                             float &y) const noexcept {
+    if (!owner || !readable(owner, 0x20)) return false;
+    // `0x968bc9c(owner)` refreshes the cache and returns `owner + 0x10`; the
+    // render entry points read the two floats there and use them as the
+    // translation that positions the whole icon batch.
+    const float cachedX = load<float>(owner, 0x10);
+    const float cachedY = load<float>(owner, 0x14);
+    if (!std::isfinite(cachedX) || !std::isfinite(cachedY) ||
+        std::abs(cachedX) > 100000.0f || std::abs(cachedY) > 100000.0f) {
+        return false;
+    }
+    x = cachedX;
+    y = cachedY;
+    return true;
+}
+
+std::string Bedrock12651Adapter::describeHudTransform(const char *label, void *owner,
+                                                     void *context) const noexcept {
+    std::ostringstream out;
+    out << "transform " << (label ? label : "?") << " owner=" << hexPointer(owner)
+        << " cached=(";
+    float cached[2]{};
+    if (readable(owner, 0x20)) {
+        cached[0] = load<float>(owner, 0x10);
+        cached[1] = load<float>(owner, 0x14);
+    }
+    out << cached[0] << ',' << cached[1] << ") context=" << hexPointer(context);
+
+    // `[[context + 0x18] + 0x48]` is the handle the render entry point uses to
+    // obtain the transform matrix: the call returns a shared_ptr and the matrix
+    // pointer is the handle's first word.  Both the window and the followed
+    // pointer are recorded so the exact member can be confirmed offline.
+    std::uintptr_t scene = 0;
+    if (readable(context, 0x20)) scene = load<std::uintptr_t>(context, 0x18);
+    out << " scene=" << hexPointer(reinterpret_cast<void *>(scene));
+    std::uintptr_t matrix = 0;
+    if (readable(reinterpret_cast<void *>(scene), 0x60)) {
+        for (std::size_t offset : {std::size_t{0x48}, std::size_t{0x50},
+                                   std::size_t{0x58}, std::size_t{0x60}}) {
+            auto const candidate =
+                load<std::uintptr_t>(reinterpret_cast<void *>(scene), offset);
+            if (plausiblePointer(reinterpret_cast<void *>(candidate)) &&
+                readable(reinterpret_cast<void *>(candidate), 64)) {
+                matrix = candidate;
+                out << " matrixField=+" << std::hex << offset << std::dec;
+                break;
+            }
+        }
+    }
+    out << " matrix=" << hexPointer(reinterpret_cast<void *>(matrix));
+    if (matrix) {
+        out << " m=[";
+        for (int i = 0; i < 16; ++i) {
+            if (i) out << ' ';
+            out << load<float>(reinterpret_cast<void *>(matrix),
+                               static_cast<std::size_t>(i) * 4);
+        }
+        out << ']';
+    }
+    auto const dumpWords = [&out](const char *name, void const *base,
+                                  std::size_t words) {
+        out << "\n  " << name << "=[";
+        if (readable(base, words * 4)) {
+            for (std::size_t i = 0; i < words; ++i) {
+                if (i) out << ' ';
+                out << std::hex
+                    << load<std::uint32_t>(base, i * 4) << std::dec;
+            }
+        } else {
+            out << "unreadable";
+        }
+        out << ']';
+    };
+    dumpWords("context", context, 0x10);
+    dumpWords("scene", reinterpret_cast<void *>(scene), 0x20);
+    return out.str();
 }
 
 std::optional<FoodSnapshot> Bedrock12651Adapter::readMainHandFood(

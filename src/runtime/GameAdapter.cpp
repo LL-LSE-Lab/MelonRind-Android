@@ -33,7 +33,8 @@ PacketDtorFn gOriginalPacketCompleteDtor{};
 PacketDtorFn gOriginalPacketDeletingDtor{};
 GameAdapter *gActiveAdapter{};
 
-void publishHungerFrame(GameAdapter &adapter, void *client, void *renderer) {
+void publishHungerFrame(GameAdapter &adapter, void *client, void *renderer,
+                        void *owner) {
     auto const *set = adapter.signatureSet();
     if (!set || !client || !renderer) return;
     Bedrock12651Adapter native(*set, adapter.inventoryGetItemTarget());
@@ -57,10 +58,18 @@ void publishHungerFrame(GameAdapter &adapter, void *client, void *renderer) {
     snapshot.hudVisible = hudVisible;
     snapshot.modeAvailable = true;
     snapshot.mainHandFood = native.readMainHandFood(player);
+    snapshot.icons.hungerCount = native.readHungerIcons(
+        renderer, snapshot.icons.hunger.data(), IconGeometry::kMaxHungerIcons);
+    float ownerX{};
+    float ownerY{};
+    if (native.readHudOwnerOrigin(owner, ownerX, ownerY)) {
+        snapshot.hungerBar = HudBarOrigin{true, ownerX, ownerY};
+    }
     adapter.publishSnapshot(std::move(snapshot));
 }
 
-void publishHeartFrame(GameAdapter &adapter, void *client, void *renderer) {
+void publishHeartFrame(GameAdapter &adapter, void *client, void *renderer,
+                       void *owner) {
     auto const *set = adapter.signatureSet();
     if (!set || !client || !renderer) return;
     Bedrock12651Adapter native(*set, adapter.inventoryGetItemTarget());
@@ -69,8 +78,18 @@ void publishHeartFrame(GameAdapter &adapter, void *client, void *renderer) {
     if (!native.readHealth(renderer, health, maximum)) return;
     auto *player = native.localPlayer(client);
     if (!player) return;
+    IconGeometry icons;
+    icons.heartCount = native.readHeartIcons(renderer, icons.heart.data(),
+                                             IconGeometry::kMaxHeartIcons,
+                                             &icons.heartTotal);
+    HudBarOrigin origin;
+    float ownerX{};
+    float ownerY{};
+    if (native.readHudOwnerOrigin(owner, ownerX, ownerY)) {
+        origin = HudBarOrigin{true, ownerX, ownerY};
+    }
     adapter.publishHealth(reinterpret_cast<std::uintptr_t>(player), health,
-                          maximum, true);
+                          maximum, true, icons, origin);
 }
 
 void hungerRenderHook(void *renderer, void *context, void *client, void *owner,
@@ -78,7 +97,10 @@ void hungerRenderHook(void *renderer, void *context, void *client, void *owner,
     if (gOriginalHungerRender) {
         gOriginalHungerRender(renderer, context, client, owner, pass);
     }
-    if (gActiveAdapter) publishHungerFrame(*gActiveAdapter, client, renderer);
+    if (gActiveAdapter) {
+        gActiveAdapter->observeHudTransform(true, owner, context);
+        publishHungerFrame(*gActiveAdapter, client, renderer, owner);
+    }
 }
 
 void heartRenderHook(void *renderer, void *context, void *client, void *owner,
@@ -86,7 +108,10 @@ void heartRenderHook(void *renderer, void *context, void *client, void *owner,
     if (gOriginalHeartRender) {
         gOriginalHeartRender(renderer, context, client, owner, pass);
     }
-    if (gActiveAdapter) publishHeartFrame(*gActiveAdapter, client, renderer);
+    if (gActiveAdapter) {
+        gActiveAdapter->observeHudTransform(false, owner, context);
+        publishHeartFrame(*gActiveAdapter, client, renderer, owner);
+    }
 }
 
 void attributeHandlerHook(void *handler, void *network, SharedPtrAbi packet) {
@@ -149,6 +174,8 @@ bool GameAdapter::install(std::string_view minecraftVersion) {
     mAttributePacketDeletingDtorTarget = 0;
     mAttributeHookCalls = 0;
     mLastAttributePacketId = 0;
+    mHungerTransformProbe.clear();
+    mHeartTransformProbe.clear();
 
     auto *set = signatureSetForVersion(minecraftVersion);
     if (!set || set->minecraftVersion != "1.26.51" ||
@@ -234,6 +261,8 @@ void GameAdapter::uninstall() noexcept {
     mPendingSaturationRuntimeId = 0;
     mPendingSaturationTick = 0;
     mSnapshotCallback = {};
+    mHungerTransformProbe.clear();
+    mHeartTransformProbe.clear();
     mHungerRenderTarget = 0;
     mHeartRenderTarget = 0;
     mAttributeHookTarget = 0;
@@ -323,6 +352,28 @@ std::string GameAdapter::lastAttributeProbe() const {
     return mLastAttributeProbe;
 }
 
+void GameAdapter::observeHudTransform(bool hunger, void *owner, void *context) {
+    if (!mHudProbeEnabled.load(std::memory_order_relaxed)) return;
+    if (!owner || !context) return;
+    const SignatureSet *set{};
+    {
+        std::shared_lock lock(mMutex);
+        if (!mInstalled || !mSignatureSet) return;
+        set = mSignatureSet;
+    }
+    Bedrock12651Adapter native(*set);
+    auto text = native.describeHudTransform(hunger ? "hunger" : "heart", owner,
+                                            context);
+    std::unique_lock lock(mMutex);
+    (hunger ? mHungerTransformProbe : mHeartTransformProbe) = std::move(text);
+}
+
+std::string GameAdapter::hudTransformProbe() const {
+    std::shared_lock lock(mMutex);
+    if (mHungerTransformProbe.empty() && mHeartTransformProbe.empty()) return {};
+    return mHungerTransformProbe + '\n' + mHeartTransformProbe;
+}
+
 bool GameAdapter::attributePacketDtorHookInstalled() const noexcept {
     std::shared_lock lock(mMutex);
     return mAttributePacketDtorHook.installed();
@@ -357,6 +408,27 @@ void GameAdapter::publishSnapshot(PlayerSnapshot snapshot) {
                 snapshot.maxHealth = mSnapshot->maxHealth;
                 snapshot.healthAvailable = true;
             }
+            // Hunger and health icons come from two different hooks while the
+            // hunger frame rebuilds the snapshot from scratch, so the group the
+            // current frame did not sample is carried over.  The heart hook
+            // clears its own group, so this only fills the gaps between the two
+            // render callbacks.
+            const auto &previous = mSnapshot->icons;
+            if (snapshot.icons.hungerCount == 0 && previous.hungerCount != 0) {
+                snapshot.icons.hunger = previous.hunger;
+                snapshot.icons.hungerCount = previous.hungerCount;
+            }
+            if (snapshot.icons.heartCount == 0 && previous.heartCount != 0) {
+                snapshot.icons.heart = previous.heart;
+                snapshot.icons.heartCount = previous.heartCount;
+                snapshot.icons.heartTotal = previous.heartTotal;
+            }
+            if (!snapshot.heartBar.available && mSnapshot->heartBar.available) {
+                snapshot.heartBar = mSnapshot->heartBar;
+            }
+            if (!snapshot.hungerBar.available && mSnapshot->hungerBar.available) {
+                snapshot.hungerBar = mSnapshot->hungerBar;
+            }
         }
         if (!snapshot.saturation && mPendingSaturation) {
             snapshot.saturation = mPendingSaturation;
@@ -373,7 +445,9 @@ void GameAdapter::publishSnapshot(PlayerSnapshot snapshot) {
 }
 
 void GameAdapter::publishHealth(std::uintptr_t playerIdentity, float health,
-                                float maxHealth, bool hudVisible) {
+                                float maxHealth, bool hudVisible,
+                                const IconGeometry &icons,
+                                const HudBarOrigin &origin) {
     std::function<void(const PlayerSnapshot &)> callback;
     std::optional<PlayerSnapshot> copy;
     {
@@ -386,6 +460,13 @@ void GameAdapter::publishHealth(std::uintptr_t playerIdentity, float health,
             std::isfinite(maxHealth) && maxHealth > 0.0f && health >= 0.0f &&
             health <= maxHealth;
         mSnapshot->hudVisible = hudVisible;
+        // The heart hook owns the heart layout: it runs once per frame while
+        // the vanilla bar is being drawn, so its (possibly empty) result
+        // replaces the previous one instead of leaving stale icons behind.
+        mSnapshot->icons.heartCount = icons.heartCount;
+        mSnapshot->icons.heartTotal = icons.heartTotal;
+        mSnapshot->icons.heart = icons.heart;
+        mSnapshot->heartBar = origin;
         mSnapshot->tick = ++mFrameCounter;
         mSnapshot = sanitizeSnapshot(*mSnapshot);
         copy = mSnapshot;

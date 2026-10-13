@@ -45,6 +45,97 @@ confirmed against the shipped library (disassembly plus on-device traces):
   addressed through the fixed file offsets in the catalog, with the module base
   derived from the already-validated hunger renderer slot.
 
+### HUD bar renderer layout
+
+Rebasing the generated MSVC headers (`HudHungerRenderer.h`,
+`HudHeartRenderer.h`) onto the measured `::MinecraftUICustomRenderer` base size
+(`0x0c`) reproduces every field the disassembly touches, which is how the icon
+geometry below was derived. Render is vtable slot 17 for both types
+(`0x9673048` hunger, `0x966edd8` heart).
+
+| `::HudHungerRenderer` | offset |
+| --- | --- |
+| `mTickCount` | `+0x0c` |
+| `mHasLoadedTextures` / `mShouldRender` / `mUseHungerEffect` / `mAnimatedLastFrame` | `+0x10 / +0x11 / +0x12 / +0x13` |
+| `mNumFullIcons` / `mNumHalfIcons` | `+0x18 / +0x20` |
+| `mHungerTextures` (6 × 32 bytes) | `+0x28` |
+| `mHungerMeshes` (6 × 632 bytes) | `+0xE8` |
+| `mIconPosition` `std::array<glm::vec3, 10>` (12-byte stride) | `+0xFB8` |
+
+The renderer passes `mIconPosition` to the icon draw helper three times: the ten
+background slots, then `mNumFullIcons` full icons, then `mNumHalfIcons` half
+icons starting at `mIconPosition + mNumFullIcons * 12`. The texture index is
+`2/3` and `4/5` selected by `mUseHungerEffect`, which matches the declared
+`HungerType` enumeration.
+
+| `::HudHeartRenderer` | offset |
+| --- | --- |
+| `mHasLoadedTextures` / `mShouldRender` | `+0x0c / +0x0d` |
+| Seven `HeartIconData` groups (`{int mType; uint64 mOffset; uint64 mCount}`, 24 bytes): background, full/half flash, full/half absorption, full, half | `+0x10` … `+0xB8` |
+| `mHeartTextures` (20 × 32 bytes) | `+0xB8` |
+| `mHeartMeshes` (20 × 632 bytes) | `+0x338` |
+| `mIconPosition` `std::vector<glm::vec3>` (begin/end/capacity) | `+0x3498 / +0x34A0 / +0x34A8` |
+
+`mFullIcon.mCount`/`mHalfIcon.mCount`/`mBackgroundIcon.mCount` are the health
+counts the catalog already reads (`0x98`/`0xB0`/`0x20`). The position vector also
+receives the absorption icons after the normal-health slots, so a consumer must
+cap the range at `ceil(maxHealth / 2)`.
+
+`::UIControl::mCachedPosition` is a `glm::vec2` at `+0x10` with a dirty bit in
+the low bit of the `ushort` at `+0x18`; the getter at `0x968bc9c` refreshes the
+cache when that bit is set and returns `owner + 0x10`. Both HUD render entry
+points call it and use the pair as the translation they place the whole icon
+batch at, which is why the icon arrays themselves only carry local offsets.
+
+## HUD calibration
+
+The launcher HUD overlay is a Java view drawn in launcher-view pixels
+(`getHudSurfaceSize()`), while the renderers publish their bar layout in UI
+units, so an AppleSkin-style overlay needs the transform between the two. Both
+render entry points translate their icon batch by
+`::UIControl::mCachedPosition` (the `glm::vec2` at `owner + 0x10`, refreshed by
+the getter at `0x968bc9c`) and then draw the *local* `mIconPosition` offsets, so
+
+```text
+pixel = (ownerCachedPosition + localIconOffset) * unitScale
+unitScale = pixels per UI unit
+```
+
+The launcher surface is the full-screen overlay view, so its size is the screen
+size in pixels, and the vanilla layout fixes two relations that recover
+`unitScale` without reading the game's transform matrix:
+
+| relation | value |
+| --- | --- |
+| health bar owner origin | `centre_x - 101` units |
+| hunger bar owner origin | `centre_x + 100` units |
+| both owner origins | `virtual_height - 41` units |
+
+`centre_x = surface_width / (2 * unitScale)` and
+`virtual_height = surface_height / unitScale`, so the two owner origins give the
+virtual width and the shared vertical origin gives the virtual height. The
+overlay fits both with least squares on `1 / unitScale` and only trusts the
+result when the two baselines agree within 5% (`unitScale = 0` in the
+configuration auto-calibrates; a positive value pins it for a HUD a resource
+pack has moved, with `hudPixelOffsetX/Y` as a pixel-level nudge).
+
+Measured on-device over a 3168x1440 overlay:
+
+| UI scale setting | owner origins (units) | estimated `unitScale` | icon pitch in the screenshot |
+| --- | --- | --- | --- |
+| 100% | heart `(163, 199)`, hunger `(364, 199)` | 6.00 | 48 px for 8 units |
+| 83% | heart `(216, 247)`, hunger `(417, 247)` | 5.00 | 40 px for 8 units |
+
+Both runs agree with the rendered icon rows to within about one pixel, and the
+estimate follows the setting without any per-device constant.
+
+Turn on `diagnosticMarkers` to re-verify: the toggle suppresses the regular
+panel, draws a cyan/magenta cross at each *raw* icon origin (which is what makes
+the unit space visible) and a calibrated marker at each computed pixel origin -
+a green box for hunger, yellow for health - whose 9-unit outline has to hug the
+vanilla icon sprite. `tools/analyze_hud_calibration.py` locates those markers in
+an `adb shell screencap` frame. Leave the toggle off during normal use.
+
 Saturation is read from `UpdateAttributesPacket` in the packet's destructors
 (both the complete-object and deleting entries, because `std::make_shared`
 invokes the former directly). Every pointer touched on that path is validated

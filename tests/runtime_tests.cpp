@@ -7,10 +7,18 @@
 #include <cstring>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 
 #include <string_view>
 
 namespace {
+/** libc++ std::vector layout: begin, end, capacity. */
+struct VectorAbi {
+    std::byte *begin;
+    std::byte *end;
+    std::byte *capacity;
+};
+
 void check(bool value, const char *message) {
     if (!value) {
         std::cerr << "FAIL: " << message << '\n';
@@ -69,6 +77,11 @@ int main() {
               primary->attributePacketCompleteDtorRva == 0xcf55560 &&
               primary->attributePacketDeletingDtorRva == 0xcf555d4,
           "packet hooks are addressed by pinned file offset");
+    check(primary && primary->hungerIconPositionOffset == 0xfb8 &&
+              primary->hungerIconCount == 10 &&
+              primary->hungerIconStride == 0xc &&
+              primary->heartIconVectorOffset == 0x3498,
+          "primary catalog carries the validated HUD icon geometry");
 
     melonrind::runtime::Bedrock12651Adapter native(*primary);
     std::array<std::byte, 0x100> hungerRenderer{};
@@ -104,6 +117,80 @@ int main() {
               health == 13.0f && maxHealth == 20.0f,
           "validated heart renderer offsets produce health values");
 
+    // Hunger icon origins: std::array<glm::vec3, 10> at +0xFB8, 12 bytes each.
+    std::array<std::byte, 0x1100> iconRenderer{};
+    for (int index = 0; index < 10; ++index) {
+        const float x = 40.0f + 9.0f * static_cast<float>(index);
+        const float y = 300.0f;
+        const float z = 0.0f;
+        auto const base = static_cast<std::size_t>(0xfb8 + index * 12);
+        std::memcpy(iconRenderer.data() + base, &x, sizeof(x));
+        std::memcpy(iconRenderer.data() + base + 4, &y, sizeof(y));
+        std::memcpy(iconRenderer.data() + base + 8, &z, sizeof(z));
+    }
+    IconPosition hungerIcons[IconGeometry::kMaxHungerIcons]{};
+    auto iconCount = native.readHungerIcons(iconRenderer.data(), hungerIcons,
+                                            IconGeometry::kMaxHungerIcons);
+    check(iconCount == 10 && hungerIcons[0].x == 40.0f &&
+              hungerIcons[9].x == 121.0f && hungerIcons[4].y == 300.0f,
+          "hunger icon origins are copied with the catalogued stride");
+    check(native.readHungerIcons(iconRenderer.data(), hungerIcons, 4) == 4,
+          "hunger icon copy honours the caller capacity");
+
+    const float broken = std::numeric_limits<float>::quiet_NaN();
+    std::memcpy(iconRenderer.data() + 0xfb8 + 5 * 12, &broken, sizeof(broken));
+    check(native.readHungerIcons(iconRenderer.data(), hungerIcons,
+                                 IconGeometry::kMaxHungerIcons) == 0,
+          "one implausible hunger origin invalidates the whole group");
+
+    // ::UIControl::mCachedPosition sits at +0x10 and is what the renderers
+    // translate their icon batch by.
+    std::array<std::byte, 0x20> owner{};
+    const float cachedX = 216.0f;
+    const float cachedY = 247.0f;
+    std::memcpy(owner.data() + 0x10, &cachedX, sizeof(cachedX));
+    std::memcpy(owner.data() + 0x14, &cachedY, sizeof(cachedY));
+    float ownerX{};
+    float ownerY{};
+    check(native.readHudOwnerOrigin(owner.data(), ownerX, ownerY) &&
+              ownerX == cachedX && ownerY == cachedY,
+          "owner cached position is read from the validated offset");
+    std::memcpy(owner.data() + 0x14, &broken, sizeof(broken));
+    check(!native.readHudOwnerOrigin(owner.data(), ownerX, ownerY),
+          "implausible owner cached position is rejected");
+
+    // Heart icon origins: std::vector<glm::vec3> at +0x3498.
+    std::array<std::byte, 3 * 12> heartIconData{};
+    for (int index = 0; index < 3; ++index) {
+        const float x = 200.0f + 9.0f * static_cast<float>(index);
+        const float y = 276.0f;
+        auto const base = static_cast<std::size_t>(index * 12);
+        std::memcpy(heartIconData.data() + base, &x, sizeof(x));
+        std::memcpy(heartIconData.data() + base + 4, &y, sizeof(y));
+    }
+    std::array<std::byte, 0x3600> heartIconRenderer{};
+    VectorAbi heartIconVector{heartIconData.data(),
+                              heartIconData.data() + heartIconData.size(),
+                              heartIconData.data() + heartIconData.size()};
+    std::memcpy(heartIconRenderer.data() + 0x3498, &heartIconVector,
+                sizeof(heartIconVector));
+    IconPosition heartIcons[IconGeometry::kMaxHeartIcons]{};
+    std::uint32_t heartTotal = 0;
+    auto heartIconCount = native.readHeartIcons(heartIconRenderer.data(), heartIcons,
+                                                IconGeometry::kMaxHeartIcons,
+                                                &heartTotal);
+    check(heartIconCount == 3 && heartTotal == 3 && heartIcons[2].x == 218.0f &&
+              heartIcons[0].y == 276.0f,
+          "heart icon origins come from the renderer's vector");
+    VectorAbi reversedVector{heartIconData.data() + heartIconData.size(),
+                             heartIconData.data(), heartIconData.data()};
+    std::memcpy(heartIconRenderer.data() + 0x3498, &reversedVector,
+                sizeof(reversedVector));
+    check(native.readHeartIcons(heartIconRenderer.data(), heartIcons,
+                                IconGeometry::kMaxHeartIcons, &heartTotal) == 0 &&
+              heartTotal == 0,
+          "a reversed heart icon vector is rejected");
+
     // AttributeData: mCurrentValue at +0, mName (::HashedString) at +0x18 so the
     // hash sits at +0x18 and the name string at +0x20.
     constexpr std::string_view saturationName = "minecraft:player.saturation";
@@ -111,7 +198,6 @@ int main() {
     float saturation = 9.5f;
     std::memcpy(attribute.data(), &saturation, sizeof(saturation));
     writeGameString(attribute.data() + 0x20, saturationName);
-    struct VectorAbi { std::byte *begin; std::byte *end; std::byte *capacity; };
     VectorAbi vector{attribute.data(), attribute.data() + attribute.size(),
                      attribute.data() + attribute.size()};
     std::array<std::byte, 0x80> packet{};
@@ -175,6 +261,37 @@ int main() {
     snapshot.alive = false;
     snapshot = sanitizeSnapshot(snapshot);
     check(!snapshot.mainHandFood.has_value(), "dead player has no food preview");
+
+    PlayerSnapshot iconSnapshot;
+    iconSnapshot.icons.hungerCount = 2;
+    iconSnapshot.icons.hunger[0] = IconPosition{40.0f, 300.0f, 0.0f};
+    iconSnapshot.icons.hunger[1] = IconPosition{49.0f, 300.0f, 0.0f};
+    iconSnapshot.icons.heartCount = 1;
+    iconSnapshot.icons.heart[0] = IconPosition{200.0f, 276.0f, 0.0f};
+    iconSnapshot.icons.heartTotal = 1;
+    auto clean = sanitizeSnapshot(iconSnapshot);
+    check(clean.icons.hungerCount == 2 && clean.icons.hunger[1].x == 49.0f &&
+              clean.icons.heartCount == 1 && clean.icons.heart[0].y == 276.0f,
+          "plausible icon origins survive sanitization");
+
+    iconSnapshot.icons.hunger[1].x = std::numeric_limits<float>::quiet_NaN();
+    clean = sanitizeSnapshot(iconSnapshot);
+    check(clean.icons.hungerCount == 0 && clean.icons.heartCount == 1,
+          "one implausible origin clears its own group only");
+
+    iconSnapshot.icons.hunger[1].x = 49.0f;
+    iconSnapshot.icons.heartCount = 9999;
+    clean = sanitizeSnapshot(iconSnapshot);
+    check(clean.icons.heartCount == IconGeometry::kMaxHeartIcons,
+          "icon counts are clamped to the bounded copy");
+
+    PlayerSnapshot originSnapshot;
+    originSnapshot.hungerBar = HudBarOrigin{true, 417.0f, 247.0f};
+    originSnapshot.heartBar = HudBarOrigin{true, 216.0f, std::nanf("")};
+    auto cleanOrigins = sanitizeSnapshot(originSnapshot);
+    check(cleanOrigins.hungerBar.available &&
+              cleanOrigins.hungerBar.x == 417.0f && !cleanOrigins.heartBar.available,
+          "an implausible bar origin is dropped on its own");
 
     std::cout << "Passed runtime checks\n";
 }

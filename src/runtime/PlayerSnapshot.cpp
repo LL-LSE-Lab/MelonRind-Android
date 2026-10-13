@@ -10,6 +10,15 @@ bool finiteIn(float value, float low, float high) noexcept {
     return std::isfinite(value) && value >= low && value <= high;
 }
 
+/**
+ * Icon origins are only ever used for drawing, so a single implausible value
+ * invalidates the whole group instead of producing a marker outside the screen.
+ */
+bool validIcon(const IconPosition &icon) noexcept {
+    return finiteIn(icon.x, -100000.0f, 100000.0f) &&
+           finiteIn(icon.y, -100000.0f, 100000.0f);
+}
+
 } // namespace
 
 bool PlayerSnapshot::hasFiniteNutrition() const noexcept {
@@ -58,6 +67,35 @@ PlayerSnapshot sanitizeSnapshot(PlayerSnapshot snapshot) noexcept {
         snapshot.health = 0.0f;
         snapshot.maxHealth = 20.0f;
     }
+
+    auto &icons = snapshot.icons;
+    icons.hungerCount = std::min<std::uint32_t>(
+        icons.hungerCount, IconGeometry::kMaxHungerIcons);
+    icons.heartCount =
+        std::min<std::uint32_t>(icons.heartCount, IconGeometry::kMaxHeartIcons);
+    for (std::uint32_t i = 0; i < icons.hungerCount; ++i) {
+        if (!validIcon(icons.hunger[i])) {
+            icons.hungerCount = 0;
+            break;
+        }
+    }
+    for (std::uint32_t i = 0; i < icons.heartCount; ++i) {
+        if (!validIcon(icons.heart[i])) {
+            icons.heartCount = 0;
+            break;
+        }
+    }
+    if (icons.heartCount == 0) icons.heartTotal = 0;
+
+    auto const sanitizeOrigin = [](HudBarOrigin &origin) {
+        if (!origin.available) return;
+        if (!finiteIn(origin.x, -100000.0f, 100000.0f) ||
+            !finiteIn(origin.y, -100000.0f, 100000.0f)) {
+            origin = HudBarOrigin{};
+        }
+    };
+    sanitizeOrigin(snapshot.hungerBar);
+    sanitizeOrigin(snapshot.heartBar);
     return snapshot;
 }
 

@@ -16,6 +16,10 @@
     "hudPosY": {"type": "number", "default": -10080},
     "estimateUnknownRule": {"type": "boolean", "default": true},
     "diagnostics": {"type": "boolean", "default": false},
+    "diagnosticMarkers": {"type": "boolean", "default": false},
+    "unitScale": {"type": "number", "minimum": 0, "maximum": 64, "default": 0},
+    "hudPixelOffsetX": {"type": "number", "minimum": -256, "maximum": 256, "default": 0},
+    "hudPixelOffsetY": {"type": "number", "minimum": -256, "maximum": 256, "default": 0},
     "saturationCap": {
       "type": "string",
       "enum": ["AttributeMaximum", "HungerAfterEating"],

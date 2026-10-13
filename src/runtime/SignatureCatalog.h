@@ -60,6 +60,28 @@ struct SignatureSet {
      */
     std::size_t attributeStride{};
     /**
+     * Icon geometry of the two HUD bar renderers.
+     *
+     * `::HudHungerRenderer::mIconPosition` is a `std::array<::glm::vec3, 10>`:
+     * ten background slots, filled by the renderer before it draws.  The
+     * disassembly passes it as the position argument of the icon draw helper
+     * three times (10 backgrounds, `mNumFullIcons` full icons, `mNumHalfIcons`
+     * half icons), and the half-icon run starts at
+     * `mIconPosition + mNumFullIcons * 12`, which fixes the element stride.
+     *
+     * `::HudHeartRenderer::mIconPosition` is a `std::vector<::glm::vec3>` whose
+     * begin/end/capacity words are read directly; absorption icons are appended
+     * after the normal-health slots, so consumers must cap the usable range.
+     *
+     * Both offsets follow from rebasing the generated MSVC headers onto the
+     * measured `::MinecraftUICustomRenderer` base size (0x0c) and were then
+     * confirmed instruction by instruction against the shipped library.
+     */
+    std::size_t hungerIconPositionOffset{};
+    std::size_t hungerIconCount{};
+    std::size_t hungerIconStride{};
+    std::size_t heartIconVectorOffset{};
+    /**
      * File offsets inside the pinned libminecraftpe.so.
      *
      * The RTTI/vtable resolver in the launcher's Preloader walks `.data.rel.ro`

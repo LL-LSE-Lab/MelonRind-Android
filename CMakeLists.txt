@@ -9,6 +9,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(MELONRIND_BUILD_TESTS "Build host-side model tests" ON)
 
 add_library(melonrind_model STATIC
+    src/model/HudTransform.cpp
+    src/model/Markers.cpp
     src/model/Preview.cpp
 )
 set_target_properties(melonrind_model PROPERTIES POSITION_INDEPENDENT_CODE ON)

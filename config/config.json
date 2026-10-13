@@ -11,5 +11,6 @@
   "hudPosY": -10080.0,
   "estimateUnknownRule": true,
   "diagnostics": false,
+  "diagnosticMarkers": false,
   "saturationCap": "HungerAfterEating"
 }

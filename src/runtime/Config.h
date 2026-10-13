@@ -34,6 +34,20 @@ struct Config {
     float hudPosY{-10080.0f};
     bool estimateUnknownRule{true};
     bool diagnostics{false};
+    /**
+     * Calibration aid: draw a cross at every icon origin the game reported and
+     * suppress the regular panel, so one screenshot pins down the mapping from
+     * the game's UI space to launcher-view pixels.  Off during normal use.
+     */
+    bool diagnosticMarkers{false};
+    /**
+     * Pixels per UI unit.  Zero auto-calibrates from the bar layout each frame;
+     * a positive value overrides it for a HUD a resource pack has moved.
+     */
+    float unitScale{0.0f};
+    /** Manual pixel nudge applied on top of the calibrated geometry. */
+    float hudPixelOffsetX{0.0f};
+    float hudPixelOffsetY{0.0f};
     SaturationCap saturationCap{SaturationCap::HungerAfterEating};
 
     /**
@@ -44,6 +58,12 @@ struct Config {
         version = 1;
         if (!std::isfinite(opacity)) opacity = 0.8f;
         if (!std::isfinite(scale)) scale = 1.0f;
+        if (!std::isfinite(unitScale) || unitScale < 0.0f) unitScale = 0.0f;
+        unitScale = std::clamp(unitScale, 0.0f, 64.0f);
+        if (!std::isfinite(hudPixelOffsetX)) hudPixelOffsetX = 0.0f;
+        if (!std::isfinite(hudPixelOffsetY)) hudPixelOffsetY = 0.0f;
+        hudPixelOffsetX = std::clamp(hudPixelOffsetX, -256.0f, 256.0f);
+        hudPixelOffsetY = std::clamp(hudPixelOffsetY, -256.0f, 256.0f);
         if (!std::isfinite(hudPosX)) hudPosX = -20000.0f;
         if (!std::isfinite(hudPosY)) hudPosY = -10080.0f;
         opacity = std::clamp(opacity, 0.0f, 1.0f);

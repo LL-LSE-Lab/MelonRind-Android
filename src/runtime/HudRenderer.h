@@ -59,9 +59,65 @@ public:
         return mConfig.diagnostics;
     }
 
+    /** True while calibration markers replace the regular panel. */
+    [[nodiscard]] bool markerModeEnabled() const noexcept {
+        return mConfig.diagnosticMarkers;
+    }
+
+    /** Last surface size reported by the launcher overlay bridge, in pixels. */
+    [[nodiscard]] float surfaceWidth() const noexcept { return mSurfaceWidth; }
+    [[nodiscard]] float surfaceHeight() const noexcept { return mSurfaceHeight; }
+
+    /**
+     * Screen geometry of both vanilla bars for one frame.
+     *
+     * The renderers publish icon origins in UI units, so the launcher pixel
+     * position is `(ownerOrigin + localIcon) * unitScale`.  The scale is
+     * auto-calibrated from the owner origins and the surface size unless the
+     * configuration pins it.
+     */
+    struct HudGeometry {
+        bool valid{};
+        bool calibrated{};
+        /**
+         * True when the auto-calibration is self-consistent, or when the
+         * configuration pins the scale.  Overlay art is only drawn when this
+         * holds: a HUD a resource pack has moved would otherwise paint in the
+         * wrong place, while the panel stays correct either way.
+         */
+        bool trusted{};
+        float unitScale{};
+        float hungerOriginX{};
+        float hungerOriginY{};
+        float heartOriginX{};
+        float heartOriginY{};
+
+        /** Pixel origin of one icon of either bar. */
+        [[nodiscard]] std::pair<float, float> iconPixel(
+            const IconPosition &icon, bool hunger) const noexcept {
+            const float originX = hunger ? hungerOriginX : heartOriginX;
+            const float originY = hunger ? hungerOriginY : heartOriginY;
+            return {originX + icon.x * unitScale,
+                    originY + icon.y * unitScale};
+        }
+    };
+
+    [[nodiscard]] HudGeometry geometry(const PlayerSnapshot &snapshot) const;
+
     /** Pure command generation hook useful for host-side tests. */
     [[nodiscard]] std::vector<pl::modmenu::DrawCommand> buildCommands(
         const PlayerSnapshot &snapshot, float timeSeconds = 0.0f) const;
+
+    /**
+     * Calibration crosses drawn at the raw icon origins reported by the game.
+     *
+     * Nothing is scaled or offset here: the crosses land exactly where the game
+     * says its icons are, in whatever space the renderers use.  Comparing that
+     * against a screenshot of the vanilla bar is what pins down the transform
+     * to launcher-view pixels.
+     */
+    [[nodiscard]] std::vector<pl::modmenu::DrawCommand> buildMarkerCommands(
+        const PlayerSnapshot &snapshot) const;
 
     /**
      * Fixed, data-independent bars.  Submitted whenever diagnostics is enabled

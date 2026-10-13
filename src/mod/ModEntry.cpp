@@ -1,3 +1,4 @@
+#include "model/HudTransform.h"
 #include "runtime/Config.h"
 #include "runtime/GameAdapter.h"
 #include "runtime/HudRenderer.h"
@@ -10,6 +11,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -81,6 +83,89 @@ std::string hexValue(std::uintptr_t value) {
     return stream.str();
 }
 
+/**
+ * One-line dump of the vanilla bar icon origins as the game reported them.
+ *
+ * The values are deliberately raw: the launcher overlay draws in view pixels
+ * while the renderers lay the bar out in their own space, and this line is what
+ * fixes the transform between the two.  `surface` is the overlay's own pixel
+ * size, so a screenshot plus this record gives the scale and the origin offset.
+ */
+std::string describeIcons(const runtime::PlayerSnapshot &snapshot,
+                          float surfaceWidth, float surfaceHeight) {
+    std::ostringstream line;
+    line << "icons surface=" << surfaceWidth << 'x' << surfaceHeight
+         << " hudVisible=" << snapshot.hudVisible
+         << " hunger=" << snapshot.icons.hungerCount << " [";
+    line << std::fixed << std::setprecision(1);
+    for (std::uint32_t i = 0; i < snapshot.icons.hungerCount; ++i) {
+        if (i != 0) line << ' ';
+        line << '(' << snapshot.icons.hunger[i].x << ','
+             << snapshot.icons.hunger[i].y << ','
+             << snapshot.icons.hunger[i].z << ')';
+    }
+    line << "] heart=" << snapshot.icons.heartCount << '/'
+         << snapshot.icons.heartTotal << " [";
+    for (std::uint32_t i = 0; i < snapshot.icons.heartCount; ++i) {
+        if (i != 0) line << ' ';
+        line << '(' << snapshot.icons.heart[i].x << ','
+             << snapshot.icons.heart[i].y << ','
+             << snapshot.icons.heart[i].z << ')';
+    }
+    line << ']';
+    return line.str();
+}
+
+/**
+ * One-line record of the calibrated HUD geometry.
+ *
+ * `unitScale` is what the overlay multiplies UI units by; `fromWidth` and
+ * `fromHeight` are the two independent estimates it is fitted from, so a log
+ * where they disagree is the signal that the HUD layout is no longer the one
+ * the constants describe (the overlay then falls back to the configured value).
+ */
+std::string describeHudGeometry(const runtime::PlayerSnapshot &snapshot,
+                                const runtime::HudRenderer &renderer) {
+    melonrind::HudCalibrationInput input;
+    input.hungerOrigin = snapshot.hungerBar.available;
+    input.heartOrigin = snapshot.heartBar.available;
+    input.hungerX = snapshot.hungerBar.x;
+    input.hungerY = snapshot.hungerBar.y;
+    input.heartX = snapshot.heartBar.x;
+    input.heartY = snapshot.heartBar.y;
+    input.surfaceWidth = renderer.surfaceWidth();
+    input.surfaceHeight = renderer.surfaceHeight();
+    const auto estimate = melonrind::estimateHudUnitScale(input);
+    const auto hud = renderer.geometry(snapshot);
+
+    std::ostringstream line;
+    line << std::fixed << std::setprecision(2);
+    line << "hud origin heart=";
+    if (snapshot.heartBar.available) {
+        line << '(' << snapshot.heartBar.x << ',' << snapshot.heartBar.y << ')';
+    } else {
+        line << "<none>";
+    }
+    line << " hunger=";
+    if (snapshot.hungerBar.available) {
+        line << '(' << snapshot.hungerBar.x << ',' << snapshot.hungerBar.y
+             << ')';
+    } else {
+        line << "<none>";
+    }
+    line << " surface=" << renderer.surfaceWidth() << 'x'
+         << renderer.surfaceHeight();
+    line << " unitScale=" << hud.unitScale << " auto=" << estimate.valid
+         << " fromWidth=" << estimate.fromWidth
+         << " fromHeight=" << estimate.fromHeight
+         << " consistent=" << estimate.consistent
+         << " trusted=" << hud.trusted;
+    line << " pixel heart=(" << hud.heartOriginX << ',' << hud.heartOriginY
+         << ") hunger=(" << hud.hungerOriginX << ',' << hud.hungerOriginY
+         << ')';
+    return line.str();
+}
+
 /** Single-threaded rate limiter for the on-demand diagnostic heartbeat. */
 class Heartbeat {
 public:
@@ -139,6 +224,7 @@ public:
                                mSelf.getVersion() + " dataDir=" +
                                mSelf.getDataDir().string());
             mRenderer.setConfig(mConfig->value());
+            mAdapter.setHudProbeEnabled(mConfig->value().diagnosticMarkers);
             mAdapter.setSnapshotCallback([this](const runtime::PlayerSnapshot &snapshot) {
                 if (mEnabled.load(std::memory_order_relaxed)) {
                     const int index =
@@ -185,6 +271,32 @@ public:
                              << mAdapter.lastAttributeProbe();
                         mDiagnostics.write(line.str());
                     }
+                    const bool iconsPresent =
+                        snapshot.icons.hungerCount != 0 ||
+                        snapshot.icons.heartCount != 0;
+                    // The first usable icon layout is always recorded, even
+                    // with both diagnostic toggles off: it is the measurement
+                    // that calibrates the overlay transform.  After that the
+                    // line only repeats every two seconds while the calibration
+                    // markers are enabled.
+                    const bool firstIcons = iconsPresent &&
+                        !mLoggedIcons.exchange(true, std::memory_order_relaxed);
+                    const bool heartbeatIcons =
+                        iconsPresent && mRenderer.markerModeEnabled() &&
+                        mIconHeartbeat.due();
+                    if (firstIcons || heartbeatIcons) {
+                        mDiagnostics.write(describeIcons(
+                            snapshot, mRenderer.surfaceWidth(),
+                            mRenderer.surfaceHeight()));
+                        mDiagnostics.write(describeHudGeometry(snapshot, mRenderer));
+                        // The transform probe only exists while the calibration
+                        // markers are enabled; it records where the renderers
+                        // get their screen placement from.
+                        if (heartbeatIcons) {
+                            const auto probe = mAdapter.hudTransformProbe();
+                            if (!probe.empty()) mDiagnostics.write(probe);
+                        }
+                    }
                     if (snapshot.mainHandFood &&
                         !mLoggedFood.exchange(true, std::memory_order_relaxed)) {
                         mSelf.getLogger().info(
@@ -209,6 +321,7 @@ public:
             });
             mRenderer.setConfigChangedCallback([this](const runtime::Config &config) {
                 std::lock_guard lock(mMutex);
+                mAdapter.setHudProbeEnabled(config.diagnosticMarkers);
                 if (!mConfig) return;
                 mConfig->value() = config;
                 mConfig->value().normalize();
@@ -287,11 +400,15 @@ public:
             mDiagnostics.write(std::string("registerModule ok moduleId=") +
                                std::string(runtime::HudRenderer::kModuleId) +
                                " diagnostics=" +
-                               (mRenderer.diagnosticsEnabled() ? "on" : "off"));
+                               (mRenderer.diagnosticsEnabled() ? "on" : "off") +
+                               " markers=" +
+                               (mRenderer.markerModeEnabled() ? "on" : "off"));
             mLoggedSnapshots = 0;
             mLoggedFood = false;
             mLoggedAttributeHook = false;
+            mLoggedIcons = false;
             mDiagHeartbeat.reset();
+            mIconHeartbeat.reset();
             mEnabled.store(true, std::memory_order_relaxed);
             return true;
         } catch (const std::exception &error) {
@@ -309,6 +426,8 @@ public:
             mLoggedSnapshots = 0;
             mLoggedFood = false;
             mLoggedAttributeHook = false;
+            mLoggedIcons = false;
+            mIconHeartbeat.reset();
             mRenderer.clear();
             mRenderer.unregisterModule();
             mAdapter.uninstall();
@@ -342,10 +461,12 @@ private:
     runtime::HudRenderer mRenderer;
     DiagnosticLog mDiagnostics;
     Heartbeat mDiagHeartbeat;
+    Heartbeat mIconHeartbeat;
     std::atomic_bool mEnabled{};
     std::atomic_int mLoggedSnapshots{};
     std::atomic_bool mLoggedFood{};
     std::atomic_bool mLoggedAttributeHook{};
+    std::atomic_bool mLoggedIcons{};
 };
 
 } // namespace

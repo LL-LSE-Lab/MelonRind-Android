@@ -1,5 +1,7 @@
 #include "runtime/HudRenderer.h"
 
+#include "model/HudTransform.h"
+#include "model/Markers.h"
 #include "model/Preview.h"
 
 #include <algorithm>
@@ -54,9 +56,69 @@ std::uint32_t withAlpha(std::uint32_t rgb, float alpha) noexcept {
     return (a << 24) | (rgb & 0x00ffffffU);
 }
 
+/** Calibration marker colours: hunger icons are cyan, hearts are magenta. */
+constexpr std::uint32_t kHungerMarkerColor = 0x00e5ff;
+constexpr std::uint32_t kHeartMarkerColor = 0xff4dd2;
+/** Colours of the calibrated markers, which must land on the vanilla icons. */
+constexpr std::uint32_t kHungerCalibratedColor = 0x39ff14;
+constexpr std::uint32_t kHeartCalibratedColor = 0xffff00;
+/**
+ * Raw icon coordinates at or below this magnitude are drawn as-is.  The
+ * launcher overlay resolves `x <= -9000` (and `x <= -19000`) as anchor
+ * sentinels, so a marker must never be submitted in that range; the game's UI
+ * coordinates for a HUD bar are four orders of magnitude smaller anyway.
+ */
+constexpr float kMarkerCoordinateLimit = 8000.0f;
+/** Vanilla HUD icon sprites are 9 UI units square (drawn on an 8-unit pitch). */
+constexpr float kIconUnits = 9.0f;
+
 } // namespace
 
+HudRenderer::HudGeometry HudRenderer::geometry(
+    const PlayerSnapshot &snapshot) const {
+    HudGeometry result;
+    melonrind::HudCalibrationInput input;
+    input.hungerOrigin = snapshot.hungerBar.available;
+    input.heartOrigin = snapshot.heartBar.available;
+    input.hungerX = snapshot.hungerBar.x;
+    input.hungerY = snapshot.hungerBar.y;
+    input.heartX = snapshot.heartBar.x;
+    input.heartY = snapshot.heartBar.y;
+    input.surfaceWidth = mSurfaceWidth;
+    input.surfaceHeight = mSurfaceHeight;
+
+    const auto estimate = melonrind::estimateHudUnitScale(input);
+    float unitScale = estimate.valid ? estimate.combined : 0.0f;
+    const bool pinned = mConfig.unitScale > 0.0f;
+    if (pinned) unitScale = mConfig.unitScale;
+    if (!std::isfinite(unitScale) || unitScale <= 0.0f) return result;
+
+    result.unitScale = unitScale;
+    result.calibrated = estimate.valid;
+    result.trusted = (estimate.valid && estimate.consistent) || pinned;
+    if (snapshot.hungerBar.available) {
+        result.hungerOriginX =
+            snapshot.hungerBar.x * unitScale + mConfig.hudPixelOffsetX;
+        result.hungerOriginY =
+            snapshot.hungerBar.y * unitScale + mConfig.hudPixelOffsetY;
+    }
+    if (snapshot.heartBar.available) {
+        result.heartOriginX =
+            snapshot.heartBar.x * unitScale + mConfig.hudPixelOffsetX;
+        result.heartOriginY =
+            snapshot.heartBar.y * unitScale + mConfig.hudPixelOffsetY;
+    }
+    result.valid = snapshot.hungerBar.available || snapshot.heartBar.available;
+    return result;
+}
+
 bool HudRenderer::registerImages() {
+    // The launcher bridge keeps registered images for the lifetime of the
+    // process and rejects a duplicate id, while unregisterModule() does not
+    // release them.  Re-registering on every enable would therefore fail and
+    // abort the whole module registration, so the images are published once.
+    static bool published = false;
+    if (published) return true;
     mImagePixels.clear();
     mImagePixels.reserve(3);
     mImagePixels.push_back(iconPixels(0xe3b341));
@@ -74,6 +136,7 @@ bool HudRenderer::registerImages() {
         mImagePixels.clear();
         return false;
     }
+    published = true;
     return true;
 }
 
@@ -113,6 +176,20 @@ bool HudRenderer::registerModule() {
                                mConfig.estimateUnknownRule ? "true" : "false")
                        .config("diagnostics", "Diagnostics", pl::modmenu::ConfigType::Toggle,
                                mConfig.diagnostics ? "true" : "false")
+                       .config("diagnosticMarkers", "Diagnostic Markers",
+                               pl::modmenu::ConfigType::Toggle,
+                               mConfig.diagnosticMarkers ? "true" : "false")
+                       .config("unitScale", "Unit Scale (0 = auto)",
+                               pl::modmenu::ConfigType::SliderFloat,
+                               std::to_string(mConfig.unitScale), "0", "16")
+                       .config("hudPixelOffsetX", "HUD Pixel Offset X",
+                               pl::modmenu::ConfigType::SliderFloat,
+                               std::to_string(mConfig.hudPixelOffsetX), "-64",
+                               "64")
+                       .config("hudPixelOffsetY", "HUD Pixel Offset Y",
+                               pl::modmenu::ConfigType::SliderFloat,
+                               std::to_string(mConfig.hudPixelOffsetY), "-64",
+                               "64")
                        .onConfigChanged([this](std::string_view moduleId,
                                                std::string_view key,
                                                std::string_view value) {
@@ -386,10 +463,117 @@ std::vector<pl::modmenu::DrawCommand> HudRenderer::buildDiagnosticCommands(
     return commands;
 }
 
+std::vector<pl::modmenu::DrawCommand> HudRenderer::buildMarkerCommands(
+    const PlayerSnapshot &rawSnapshot) const {
+    std::vector<pl::modmenu::DrawCommand> commands;
+    const auto snapshot = sanitizeSnapshot(rawSnapshot);
+    const auto &icons = snapshot.icons;
+    if (icons.hungerCount == 0 && icons.heartCount == 0) return commands;
+
+    const auto hud = geometry(snapshot);
+    commands.reserve(static_cast<std::size_t>(icons.hungerCount +
+                                              icons.heartCount) *
+                     10);
+
+    auto const addCross = [&commands](float x, float y, std::uint32_t color,
+                                      float arm, float dot) {
+        commands.push_back({.type = pl::modmenu::DrawCommandType::RectFilled,
+                            .x = x - dot,
+                            .y = y - dot,
+                            .w = dot * 2.0f,
+                            .h = dot * 2.0f,
+                            .color = withAlpha(color, 1.0f),
+                            .text = {},
+                            .fontId = {},
+                            .imageId = {}});
+        commands.push_back({.type = pl::modmenu::DrawCommandType::Line,
+                            .x = x - arm,
+                            .y = y,
+                            .w = arm * 2.0f,
+                            .h = 0.0f,
+                            .color = withAlpha(color, 1.0f),
+                            .size = 1.0f,
+                            .text = {},
+                            .fontId = {},
+                            .imageId = {}});
+        commands.push_back({.type = pl::modmenu::DrawCommandType::Line,
+                            .x = x,
+                            .y = y - arm,
+                            .w = 0.0f,
+                            .h = arm * 2.0f,
+                            .color = withAlpha(color, 1.0f),
+                            .size = 1.0f,
+                            .text = {},
+                            .fontId = {},
+                            .imageId = {}});
+    };
+    // A marker drawn at the raw value: it lands wherever the renderer's own
+    // coordinate space starts, which is what made the unit scale measurable.
+    auto const addRawMarker = [&addCross](const melonrind::MarkerPoint &point,
+                                          std::uint32_t color) {
+        addCross(point.x, point.y, color, 7.0f, 2.0f);
+    };
+    // The calibrated marker is what has to sit exactly on the vanilla icon: a
+    // dot at the sprite's top-left corner plus its 9-unit outline.
+    auto const addCalibratedMarker = [&commands, &addCross, &hud](
+                                         float x, float y, std::uint32_t color) {
+        addCross(x, y, color, 6.0f, 2.0f);
+        const float size = kIconUnits * hud.unitScale;
+        const float box[4][4] = {
+            {x, y, size, 0.0f},
+            {x, y + size, size, 0.0f},
+            {x, y, 0.0f, size},
+            {x + size, y, 0.0f, size},
+        };
+        for (auto const &line : box) {
+            commands.push_back({.type = pl::modmenu::DrawCommandType::Line,
+                                .x = line[0],
+                                .y = line[1],
+                                .w = line[2],
+                                .h = line[3],
+                                .color = withAlpha(color, 1.0f),
+                                .size = 1.0f,
+                                .text = {},
+                                .fontId = {},
+                                .imageId = {}});
+        }
+    };
+
+    auto const drawBar = [&](const IconPosition *source, std::uint32_t count,
+                             bool hunger, std::uint32_t rawColor,
+                             std::uint32_t calibratedColor) {
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const auto &icon = source[i];
+            const melonrind::MarkerPoint point{icon.x, icon.y};
+            const std::span<const melonrind::MarkerPoint> single{&point, 1};
+            if (melonrind::usableMarkerPoints(single, kMarkerCoordinateLimit)
+                    .empty()) {
+                continue;
+            }
+            addRawMarker(point, rawColor);
+            if (!hud.valid) continue;
+            const auto pixel = hud.iconPixel(icon, hunger);
+            addCalibratedMarker(pixel.first, pixel.second, calibratedColor);
+        }
+    };
+    drawBar(icons.hunger.data(), icons.hungerCount, true, kHungerMarkerColor,
+            kHungerCalibratedColor);
+    drawBar(icons.heart.data(), icons.heartCount, false, kHeartMarkerColor,
+            kHeartCalibratedColor);
+    return commands;
+}
+
 void HudRenderer::render(const PlayerSnapshot &snapshot, float timeSeconds) {
     if (!mRegistered) return;
     const auto surface = pl::modmenu::getHudSurfaceSize();
     setSurfaceSize(surface.width, surface.height);
+    if (mConfig.enabled && mConfig.diagnosticMarkers) {
+        // Calibration mode deliberately submits only the crosses: the regular
+        // panel sits on top of the vanilla hunger bar and would hide exactly the
+        // pixels the calibration screenshot has to measure.
+        pl::modmenu::submitDrawCommands(kModuleId, buildMarkerCommands(snapshot));
+        return;
+    }
     if (!mConfig.enabled || !snapshot.hudVisible) {
         // Diagnostics keeps a fixed marker on screen instead of clearing, so a
         // suppressed HUD is immediately distinguishable from a broken one.
@@ -445,6 +629,10 @@ void HudRenderer::handleConfig(std::string_view moduleId, std::string_view key,
     else if (key == "pulse") mConfig.pulse = parseBool(value, mConfig.pulse);
     else if (key == "estimateUnknownRule") mConfig.estimateUnknownRule = parseBool(value, mConfig.estimateUnknownRule);
     else if (key == "diagnostics") mConfig.diagnostics = parseBool(value, mConfig.diagnostics);
+    else if (key == "diagnosticMarkers") mConfig.diagnosticMarkers = parseBool(value, mConfig.diagnosticMarkers);
+    else if (key == "unitScale") mConfig.unitScale = parseFloat(value, mConfig.unitScale);
+    else if (key == "hudPixelOffsetX") mConfig.hudPixelOffsetX = parseFloat(value, mConfig.hudPixelOffsetX);
+    else if (key == "hudPixelOffsetY") mConfig.hudPixelOffsetY = parseFloat(value, mConfig.hudPixelOffsetY);
     else if (key == "opacity") mConfig.opacity = parseFloat(value, mConfig.opacity);
     else if (key == "scale") mConfig.scale = parseFloat(value, mConfig.scale);
     else if (key == "saturationCap") mConfig.saturationCap = saturationCapFromName(value);

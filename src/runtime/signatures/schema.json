@@ -51,6 +51,10 @@
         "foodAlwaysEatSlot": { "type": "integer", "minimum": 0 },
         "packetPayloadOffset": { "type": ["integer", "string"] },
         "attributeStride": { "type": ["integer", "string"] },
+        "hungerIconPositionOffset": { "type": ["integer", "string"] },
+        "hungerIconCount": { "type": "integer", "minimum": 0 },
+        "hungerIconStride": { "type": ["integer", "string"] },
+        "heartIconVectorOffset": { "type": ["integer", "string"] },
         "hungerRenderRva": { "type": ["integer", "string"] },
         "attributePacketCompleteDtorRva": { "type": ["integer", "string"] },
         "attributePacketDeletingDtorRva": { "type": ["integer", "string"] }

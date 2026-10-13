@@ -47,7 +47,8 @@ public:
 
     /** Merge the health row sampled from HudHeartRenderer. */
     void publishHealth(std::uintptr_t playerIdentity, float health,
-                       float maxHealth, bool hudVisible);
+                       float maxHealth, bool hudVisible,
+                       const IconGeometry &icons, const HudBarOrigin &origin);
 
     /**
      * Parse a validated attribute packet at the native boundary.
@@ -69,6 +70,20 @@ public:
     [[nodiscard]] std::uintptr_t attributePacketDtorTarget() const noexcept;
     [[nodiscard]] std::uintptr_t attributePacketDeletingDtorTarget() const noexcept;
     [[nodiscard]] bool attributePacketDtorHookInstalled() const noexcept;
+    [[nodiscard]] bool hudProbeEnabled() const noexcept {
+        return mHudProbeEnabled.load(std::memory_order_relaxed);
+    }
+
+    /**
+     * Diagnostic capture of one HUD bar's screen transform.
+     *
+     * @param hunger True for the hunger bar, false for the health bar.
+     */
+    void observeHudTransform(bool hunger, void *owner, void *context);
+    void setHudProbeEnabled(bool enabled) noexcept {
+        mHudProbeEnabled.store(enabled, std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::string hudTransformProbe() const;
 
     /** Render sink used by a version-specific frame adapter. */
     void setSnapshotCallback(std::function<void(const PlayerSnapshot &)> callback);
@@ -111,6 +126,9 @@ private:
     std::uint64_t mAttributeHookCalls{};
     std::uint32_t mLastAttributePacketId{};
     std::string mLastAttributeProbe;
+    std::atomic_bool mHudProbeEnabled{};
+    std::string mHungerTransformProbe;
+    std::string mHeartTransformProbe;
 };
 
 } // namespace melonrind::runtime
