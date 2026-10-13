@@ -18,6 +18,15 @@ enum class SaturationCap : std::uint8_t {
 };
 
 /**
+ * How the HUD is presented: an AppleSkin-style overlay painted directly over the
+ * vanilla icons, or the compact panel the first release shipped.
+ */
+enum class RenderMode : std::uint8_t {
+    Overlay,
+    Panel,
+};
+
+/**
  * Native runtime configuration.  This is deliberately an aggregate so it can
  * be used directly with pl::config::ConfigFile by the mod entry point.
  */
@@ -49,6 +58,7 @@ struct Config {
     float hudPixelOffsetX{0.0f};
     float hudPixelOffsetY{0.0f};
     SaturationCap saturationCap{SaturationCap::HungerAfterEating};
+    RenderMode renderMode{RenderMode::Overlay};
 
     /**
      * Clamp values loaded from a user file or Mod Menu.  Returning the same
@@ -86,6 +96,15 @@ struct Config {
     std::string_view name) noexcept {
     return name == "attributeMaximum" ? SaturationCap::AttributeMaximum
                                        : SaturationCap::HungerAfterEating;
+}
+
+[[nodiscard]] inline constexpr std::string_view renderModeName(
+    RenderMode mode) noexcept {
+    return mode == RenderMode::Panel ? "panel" : "overlay";
+}
+
+[[nodiscard]] inline RenderMode renderModeFromName(std::string_view name) noexcept {
+    return name == "panel" ? RenderMode::Panel : RenderMode::Overlay;
 }
 
 } // namespace melonrind::runtime

@@ -1,5 +1,7 @@
 #include "model/HudTransform.h"
 #include "model/Markers.h"
+#include "model/OverlayArt.h"
+#include "model/OverlayPlan.h"
 #include "model/Preview.h"
 #include "model/SaturationObservation.h"
 
@@ -130,5 +132,100 @@ int main() {
     degenerate.surfaceHeight = nan;
     check(!estimateHudUnitScale(degenerate).valid,
           "calibration rejects a non-finite surface size");
+
+    // Overlay art: a 9x9 sprite with a distinct alpha per column, so the crop
+    // mapping is checkable pixel by pixel.
+    std::array<unsigned char, 9 * 9 * 4> art{};
+    for (int y = 0; y < 9; ++y) {
+        for (int x = 0; x < 9; ++x) {
+            art[(y * 9 + x) * 4 + 0] = static_cast<unsigned char>(x);
+            art[(y * 9 + x) * 4 + 1] = static_cast<unsigned char>(y);
+            art[(y * 9 + x) * 4 + 3] = 255;
+        }
+    }
+    auto fullArt = cropOverlayArt(art, 0.0f, 1.0f, 6);
+    check(fullArt.width == 54 && fullArt.height == 54,
+          "full crop covers the whole 9-unit sprite at the art resolution");
+    check(fullArt.pixels[(0 * 54 + 0) * 4 + 0] == 0 &&
+              fullArt.pixels[(0 * 54 + 53) * 4 + 0] == 8 &&
+              fullArt.pixels[(53 * 54 + 0) * 4 + 1] == 8,
+          "a full crop maps destination pixels back to sprite columns and rows");
+    auto halfArt = cropOverlayArt(art, 0.5f, 1.0f, 6);
+    check(halfArt.width == 27 && halfArt.height == 54 &&
+              halfArt.pixels[0] == 4,
+          "a half crop starts at the sprite column that contains the boundary");
+    check(cropOverlayArt(art, 0.5f, 0.5f, 6).empty() &&
+              cropOverlayArt(art, nan, 1.0f, 6).empty(),
+          "degenerate crops produce no image");
+
+    // Crop quantisation has to stay inside the pre-registered set, otherwise the
+    // overlay would reference an image id the launcher never received.
+    const auto registry = registeredIconCrops();
+    check(registry.size() == static_cast<std::size_t>(kOverlayFillSteps) + 6,
+          "the registered crop set is the fine fill ladder plus the quarter grid");
+    auto const registered = [&registry](const IconCrop &crop) {
+        return std::find(registry.begin(), registry.end(), crop) != registry.end();
+    };
+    check(canonicalIconCrop(0.0f, 1.0f) == IconCrop{0.0f, 1.0f} &&
+              canonicalIconCrop(0.9f, 1.0f) == IconCrop{0.875f, 1.0f} &&
+              canonicalIconCrop(0.97f, 1.0f) == IconCrop{0.9375f, 1.0f},
+          "a fill that reaches the sprite edge keeps the fine resolution");
+    check(canonicalIconCrop(0.3f, 0.7f) == IconCrop{0.25f, 0.75f} &&
+              canonicalIconCrop(0.2f, 0.21f) == IconCrop{0.0f, 0.25f},
+          "an interior range snaps outward onto the quarter grid");
+    check(canonicalIconCrop(0.4f, 0.0f).empty() &&
+              canonicalIconCrop(nan, 1.0f).empty(),
+          "an empty or non-finite range quantises to nothing");
+    for (float left = 0.0f; left <= 1.0f; left += 0.05f) {
+        for (float right = left; right <= 1.0f; right += 0.05f) {
+            const auto crop = canonicalIconCrop(left, right);
+            if (crop.empty()) continue;
+            check(registered(crop), "every quantised crop is pre-registered");
+            check(crop.left >= left - 0.26f && crop.right <= right + 0.26f,
+                  "quantisation stays within a quarter icon of the request");
+        }
+    }
+
+    // Planned fills: the hunger bar fills from its right end, the health bar
+    // from its left.
+    auto saturationDraws = planIconDraws(0.0f, 3.8f, 10, true);
+    check(saturationDraws.size() == 2 && saturationDraws[0].index == 0 &&
+              saturationDraws[0].crop == IconCrop{0.0f, 1.0f} &&
+              saturationDraws[1].index == 1 &&
+              near(saturationDraws[1].crop.left, 0.1f) &&
+              saturationDraws[1].crop.right == 1.0f,
+          "saturation fills the rightmost icons first, with the tail on the right");
+    auto previewDraws = planIconDraws(9.0f, 13.0f, 10, true);
+    check(previewDraws.size() == 3 && previewDraws[0].index == 4 &&
+              near(previewDraws[0].crop.left, 0.0f) &&
+              near(previewDraws[0].crop.right, 0.5f) &&
+              previewDraws[1].crop == IconCrop{0.0f, 1.0f} &&
+              previewDraws[2].index == 6 &&
+              near(previewDraws[2].crop.left, 0.5f),
+          "a hunger gain paints the empty part of the boundary icon");
+    auto singleIcon = planIconDraws(8.5f, 9.5f, 10, true);
+    check(singleIcon.size() == 1 && singleIcon[0].index == 4 &&
+              near(singleIcon[0].crop.left, 0.25f) &&
+              near(singleIcon[0].crop.right, 0.75f),
+          "a one-point gain inside a single icon yields an interior sub-rect");
+    auto heartDraws = planIconDraws(9.0f, 13.0f, 10, false);
+    check(heartDraws.size() == 3 && heartDraws[0].index == 4 &&
+              near(heartDraws[0].crop.left, 0.5f) &&
+              heartDraws[0].crop.right == 1.0f &&
+              heartDraws[2].index == 6 &&
+              near(heartDraws[2].crop.right, 0.5f),
+          "the health preview fills left to right");
+    check(planIconDraws(0.0f, 20.0f, 10, true).size() == 10 &&
+              planIconDraws(5.0f, 5.0f, 10, true).empty() &&
+              planIconDraws(0.0f, 5.0f, 0, true).empty(),
+          "planned fills clamp to the bar and reject empty requests");
+    for (auto const &draw : saturationDraws) {
+        check(registered(canonicalIconCrop(draw.crop.left, draw.crop.right)),
+              "planned fills resolve to a registered crop");
+    }
+    for (auto const &draw : heartDraws) {
+        check(registered(canonicalIconCrop(draw.crop.left, draw.crop.right)),
+              "planned heart fills resolve to a registered crop");
+    }
     std::cout << "Passed " << checks << " checks\n";
 }

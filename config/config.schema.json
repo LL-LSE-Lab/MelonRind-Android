@@ -24,6 +24,11 @@
       "type": "string",
       "enum": ["AttributeMaximum", "HungerAfterEating"],
       "default": "HungerAfterEating"
+    },
+    "renderMode": {
+      "type": "string",
+      "enum": ["overlay", "panel"],
+      "default": "overlay"
     }
   },
   "required": ["version"]

@@ -7,8 +7,10 @@ LeviLaunchroid. The first development release is `0.1.0-dev.1`.
 
 - ARM64 Android native mod using `preloader-android`.
 - Minecraft Bedrock `1.26.50.x`, `1.26.51.x` and `1.26.52.x` manifest gates.
-- Saturation, held-food hunger/saturation preview, and regeneration preview
-  model code.
+- AppleSkin-style overlay: saturation, held-food hunger/saturation preview and
+  regeneration preview painted directly over the vanilla bars.
+- Compact panel output kept as a fallback when the calibrated bar geometry is
+  not available.
 - Mod Menu configuration and draw-command HUD output.
 
 The supplied Minecraft 1.26.51.1 ARM64 APK has been inspected. The adapter
@@ -135,6 +137,71 @@ the unit space visible) and a calibrated marker at each computed pixel origin -
 a green box for hunger, yellow for health - whose 9-unit outline has to hug the
 vanilla icon sprite. `tools/analyze_hud_calibration.py` locates those markers in
 an `adb shell screencap` frame. Leave the toggle off during normal use.
+
+## Overlay rendering
+
+With the geometry above, the default `renderMode` is `overlay`: the launcher
+draws each fill as an image directly on top of the vanilla icon, at
+
+```text
+x = ownerOriginX + (localIconX + cropLeft * 9) * unitScale
+w = (cropRight - cropLeft) * 9 * unitScale
+h = 9 * unitScale
+```
+
+`renderMode = panel` keeps the compact panel, and the overlay falls back to it
+automatically when the calibration is missing or not self-consistent, so an
+unsupported client or a resource pack that moved the bars degrades to something
+readable instead of drawing in the wrong place.
+
+**Art.** A launcher draw command has no source rectangle and no tint, so every
+fractional fill is a separately registered image. `tools/generate_overlay_art.py`
+turns the sibling desktop mod's 9x9 sprites into
+`src/runtime/generated/OverlayArt.h` (gold drumstick outline, green heart, plus
+the drumstick recoloured pale for the food preview), and the renderer registers
+each of them once per quantised crop:
+
+| crop table | entries | used by |
+| --- | --- | --- |
+| right-anchored fill ladder, 1/16 icon steps | 16 | hunger, saturation (always reach the sprite's right edge) |
+| quarter-icon intervals inside one sprite | 6 | food preview, regeneration (hunger and health only move in half-point steps) |
+
+AppleSkin quantises the same way: its saturation sheet ships four pre-cropped
+variants per icon and its preview steps in half icons.
+
+**What is painted.**
+
+| bar | range | art | alpha |
+| --- | --- | --- | --- |
+| hunger | `[0, saturation]` | gold | `opacity` (steady) |
+| hunger | `[hungerBefore, hungerAfter]` | pale | `opacity * pulse` |
+| hunger | `[saturationBefore, saturationAfter]` | gold | `opacity * pulse` |
+| hearts | `[health, health + lowHp]` | green | `opacity * pulse` |
+| hearts | `[health + lowHp, health + highHp]` | green | `opacity * pulse * 0.6` |
+
+`pulse = 0.5 + 0.3 * sin(4t)` matches the desktop mod; the regeneration range is
+capped at `ceil(maxHealth / 2)` icons so absorption hearts are never overlaid.
+
+**Configuration** (also exposed in the Mod Menu): `renderMode` (`overlay` /
+`panel`), `showSaturation`, `showFoodPreview`, `showRegeneration`, `pulse` and
+`opacity` drive what is painted; `unitScale` (0 auto-calibrates) and
+`hudPixelOffsetX/Y` override the geometry for a HUD the calibration cannot
+describe; `diagnosticMarkers` and `diagnostics` are the troubleshooting toggles.
+
+**Known limitations**, all of them art or fidelity details rather than placement:
+
+- The hunger-effect ("rotten") and heart-status variants of the vanilla icons
+  are not reproduced; the overlay always uses the neutral art.
+- AppleSkin also paints the *empty* icon at `alpha * 0.25` behind a preview;
+  that needs the vanilla empty-icon sprite and is not implemented.
+- The launcher draws the overlay through an Android `Canvas`, and on this device
+  a wide-gamut display shifts saturated colours slightly (pure sRGB yellow
+  `#FFFF00` is captured as `(255, 255, 84)`), so the overlay's gold reads a
+  little softer than the source art. The vanilla OpenGL HUD is unaffected.
+- `unitScale` auto-calibration assumes the vanilla bar layout documented above.
+  A resource pack that moves the bars makes the two baselines disagree; the log
+  then reports `consistent=0` and the overlay falls back to the panel (or uses
+  the `unitScale` value pinned in the configuration).
 
 Saturation is read from `UpdateAttributesPacket` in the packet's destructors
 (both the complete-object and deleting entries, because `std::make_shared`

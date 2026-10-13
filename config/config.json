@@ -12,5 +12,6 @@
   "estimateUnknownRule": true,
   "diagnostics": false,
   "diagnosticMarkers": false,
+  "renderMode": "overlay",
   "saturationCap": "HungerAfterEating"
 }

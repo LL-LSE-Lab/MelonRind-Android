@@ -1,7 +1,10 @@
 #include "runtime/HudRenderer.h"
 
+#include "generated/OverlayArt.h"
 #include "model/HudTransform.h"
 #include "model/Markers.h"
+#include "model/OverlayArt.h"
+#include "model/OverlayPlan.h"
 #include "model/Preview.h"
 
 #include <algorithm>
@@ -16,6 +19,14 @@ namespace {
 constexpr std::string_view kSaturationImage = "melonrind.android.saturation";
 constexpr std::string_view kFoodImage = "melonrind.android.food";
 constexpr std::string_view kRegenImage = "melonrind.android.regen";
+
+/**
+ * Overlay art families.  Each one is registered once per quantised crop, since
+ * a launcher draw command cannot crop or tint an image.
+ */
+constexpr std::string_view kSaturationArt = "sat";
+constexpr std::string_view kPreviewArt = "pre";
+constexpr std::string_view kRegenArt = "reg";
 
 float parseFloat(std::string_view value, float fallback) noexcept {
     std::string text(value);
@@ -136,7 +147,39 @@ bool HudRenderer::registerImages() {
         mImagePixels.clear();
         return false;
     }
+    if (!registerOverlayImages()) return false;
     published = true;
+    return true;
+}
+
+std::string HudRenderer::overlayImageId(std::string_view art,
+                                        const melonrind::IconCrop &crop) const {
+    return std::string(kModuleId) + ".ov." + std::string(art) + "." +
+           melonrind::iconCropKey(crop);
+}
+
+bool HudRenderer::registerOverlayImages() {
+    // Every fill the overlay can draw is one of the pre-quantised crops, so the
+    // whole set is published up front: the launcher creates a bitmap lazily, and
+    // only the crops that are actually painted ever get drawn.
+    const auto crops = melonrind::registeredIconCrops();
+    const std::pair<std::string_view, std::span<const unsigned char>> arts[3] = {
+        {kSaturationArt, melonrind::generated::kSaturationArt},
+        {kPreviewArt, melonrind::generated::kFoodPreviewArt},
+        {kRegenArt, melonrind::generated::kRegenArt},
+    };
+    for (auto const &[art, pixels] : arts) {
+        for (auto const &crop : crops) {
+            const auto image =
+                melonrind::cropOverlayArt(pixels, crop.left, crop.right);
+            if (image.empty()) return false;
+            if (!pl::modmenu::registerImage(overlayImageId(art, crop),
+                                            image.pixels, image.width,
+                                            image.height)) {
+                return false;
+            }
+        }
+    }
     return true;
 }
 
@@ -152,6 +195,10 @@ bool HudRenderer::registerModule() {
                        .onToggle([this](std::string_view moduleId, bool enabled) {
                            handleToggle(moduleId, enabled);
                        })
+                       .config("renderMode", "Render Mode",
+                               pl::modmenu::ConfigType::Radio,
+                               std::string(renderModeName(mConfig.renderMode)),
+                               "overlay,panel")
                        .config("showSaturation", "Show Saturation",
                                pl::modmenu::ConfigType::Toggle,
                                mConfig.showSaturation ? "true" : "false")
@@ -563,6 +610,120 @@ std::vector<pl::modmenu::DrawCommand> HudRenderer::buildMarkerCommands(
     return commands;
 }
 
+std::vector<pl::modmenu::DrawCommand> HudRenderer::buildOverlayCommands(
+    const PlayerSnapshot &rawSnapshot, float timeSeconds) const {
+    std::vector<pl::modmenu::DrawCommand> commands;
+    if (!mConfig.enabled || !rawSnapshot.hudVisible || !rawSnapshot.alive ||
+        rawSnapshot.creative || rawSnapshot.spectator) {
+        return commands;
+    }
+    auto const snapshot = sanitizeSnapshot(rawSnapshot);
+    auto const hud = geometry(snapshot);
+    if (!hud.valid || !hud.trusted) return commands;
+    if (!snapshot.hasFiniteNutrition()) return commands;
+
+    const float iconSize = melonrind::kOverlayIconUnits * hud.unitScale;
+    if (!std::isfinite(iconSize) || iconSize <= 0.0f) return commands;
+    // Same pulse the desktop mod uses: the preview and both regeneration bands
+    // breathe, while the saturation a player already has stays steady.
+    const float pulse = mConfig.pulse
+                            ? 0.5f + 0.3f * std::sin(timeSeconds * 4.0f)
+                            : 0.65f;
+    const float base = mConfig.opacity;
+
+    auto const emit = [&](const melonrind::IconDraw &draw, bool hunger,
+                          std::string_view art, float alpha) {
+        if (!std::isfinite(alpha) || alpha <= 0.004f) return;
+        const melonrind::IconCrop crop =
+            melonrind::canonicalIconCrop(draw.crop.left, draw.crop.right);
+        if (crop.empty()) return;
+        const auto &icon = hunger ? snapshot.icons.hunger[draw.index]
+                                  : snapshot.icons.heart[draw.index];
+        const auto origin = hud.iconPixel(icon, hunger);
+        commands.push_back({.type = pl::modmenu::DrawCommandType::Image,
+                            .x = origin.first + crop.left * iconSize,
+                            .y = origin.second,
+                            .w = (crop.right - crop.left) * iconSize,
+                            .h = iconSize,
+                            .color = withAlpha(0xffffff, alpha),
+                            .text = {},
+                            .fontId = {},
+                            .imageId = overlayImageId(art, crop)});
+    };
+    auto const emitAll = [&](float before, float after, std::size_t iconCount,
+                             bool hunger, bool reverseFill, std::string_view art,
+                             float alpha) {
+        for (auto const &draw :
+             melonrind::planIconDraws(before, after, iconCount, reverseFill)) {
+            emit(draw, hunger, art, alpha);
+        }
+    };
+
+    const auto food = snapshot.mainHandFood;
+    std::optional<melonrind::MealPreview> meal;
+    if (food) {
+        meal = melonrind::previewMeal(
+            {snapshot.hunger, snapshot.maxHunger, snapshot.saturation,
+             snapshot.maxSaturation},
+            {food->nutrition, food->saturationModifier, food->alwaysEat,
+             food->uncertainEffects},
+            mConfig.saturationCap == SaturationCap::AttributeMaximum
+                ? melonrind::SaturationCap::AttributeMaximum
+                : melonrind::SaturationCap::HungerAfterEating);
+    }
+
+    const std::size_t hungerIcons = snapshot.icons.hungerCount;
+    const std::size_t heartIcons =
+        snapshot.maxHealth > 0.0f
+            ? std::min<std::size_t>(
+                  snapshot.icons.heartCount,
+                  static_cast<std::size_t>(
+                      std::ceil(snapshot.maxHealth / 2.0f)))
+            : 0;
+
+    // Held-food preview first: it is the "what this meal will add" ghost, and
+    // everything else is painted on top of it.
+    if (mConfig.showFoodPreview && meal && meal->hungerAfter > meal->hungerBefore) {
+        emitAll(meal->hungerBefore, meal->hungerAfter, hungerIcons, true, true,
+                kPreviewArt, base * pulse);
+    }
+    if (mConfig.showSaturation && snapshot.saturation) {
+        emitAll(0.0f, *snapshot.saturation, hungerIcons, true, true,
+                kSaturationArt, base);
+        if (mConfig.showFoodPreview && meal && meal->saturationBefore &&
+            meal->saturationAfter &&
+            *meal->saturationAfter > *meal->saturationBefore) {
+            emitAll(*meal->saturationBefore, *meal->saturationAfter, hungerIcons,
+                    true, true, kSaturationArt, base * pulse);
+        }
+    }
+    if (mConfig.showRegeneration && meal && snapshot.hasFiniteHealth() &&
+        heartIcons != 0) {
+        melonrind::RegenContext context{
+            snapshot.health,
+            snapshot.maxHealth,
+            static_cast<melonrind::RuleState>(snapshot.naturalRegeneration),
+            snapshot.peaceful,
+            snapshot.regenerationSuppressed || meal->uncertainEffects,
+            mConfig.estimateUnknownRule,
+        };
+        if (auto regen = melonrind::previewRegeneration(*meal, context)) {
+            const float hp = snapshot.health;
+            if (regen->lowHp > 0.0f) {
+                emitAll(hp, hp + regen->lowHp, heartIcons, false, false,
+                        kRegenArt, base * pulse);
+            }
+            if (regen->highHp > regen->lowHp) {
+                // The uncertain extra healing stays dimmer, but visible over the
+                // empty hearts it is drawn on.
+                emitAll(hp + regen->lowHp, hp + regen->highHp, heartIcons, false,
+                        false, kRegenArt, base * pulse * 0.6f);
+            }
+        }
+    }
+    return commands;
+}
+
 void HudRenderer::render(const PlayerSnapshot &snapshot, float timeSeconds) {
     if (!mRegistered) return;
     const auto surface = pl::modmenu::getHudSurfaceSize();
@@ -585,8 +746,17 @@ void HudRenderer::render(const PlayerSnapshot &snapshot, float timeSeconds) {
         }
         return;
     }
-    auto commands = buildCommands(snapshot, timeSeconds);
-    if (commands.empty() && mConfig.diagnostics) {
+    // The overlay needs the calibrated bar geometry; without it the compact
+    // panel is still drawn, so a HUD the calibration cannot describe (an
+    // unsupported client, a resource pack that moved the bars) degrades to
+    // something readable instead of nothing.
+    const auto hud = geometry(snapshot);
+    const bool overlayReady =
+        mConfig.renderMode == RenderMode::Overlay && hud.valid && hud.trusted &&
+        (snapshot.icons.hungerCount != 0 || snapshot.icons.heartCount != 0);
+    auto commands = overlayReady ? buildOverlayCommands(snapshot, timeSeconds)
+                                 : buildCommands(snapshot, timeSeconds);
+    if (commands.empty() && !overlayReady && mConfig.diagnostics) {
         commands = buildDiagnosticCommands(timeSeconds);
     }
     pl::modmenu::submitDrawCommands(kModuleId, commands);
@@ -636,6 +806,7 @@ void HudRenderer::handleConfig(std::string_view moduleId, std::string_view key,
     else if (key == "opacity") mConfig.opacity = parseFloat(value, mConfig.opacity);
     else if (key == "scale") mConfig.scale = parseFloat(value, mConfig.scale);
     else if (key == "saturationCap") mConfig.saturationCap = saturationCapFromName(value);
+    else if (key == "renderMode") mConfig.renderMode = renderModeFromName(value);
     mConfig.normalize();
     notifyConfigChanged();
 }

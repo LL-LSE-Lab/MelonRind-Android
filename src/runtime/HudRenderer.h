@@ -1,5 +1,6 @@
 #pragma once
 
+#include "model/OverlayPlan.h"
 #include "runtime/Config.h"
 #include "runtime/PlayerSnapshot.h"
 
@@ -109,6 +110,18 @@ public:
         const PlayerSnapshot &snapshot, float timeSeconds = 0.0f) const;
 
     /**
+     * AppleSkin-style overlay: saturation, held-food preview and regeneration
+     * painted directly over the vanilla bars.
+     *
+     * Every fill is one of the pre-registered crops of the art in
+     * `generated/OverlayArt.h`, positioned through `geometry()` so it lands on
+     * the icon the game just drew.  Returns nothing when the calibrated
+     * geometry is not available.
+     */
+    [[nodiscard]] std::vector<pl::modmenu::DrawCommand> buildOverlayCommands(
+        const PlayerSnapshot &snapshot, float timeSeconds = 0.0f) const;
+
+    /**
      * Calibration crosses drawn at the raw icon origins reported by the game.
      *
      * Nothing is scaled or offset here: the crosses land exactly where the game
@@ -140,6 +153,9 @@ private:
     std::function<void(const Config &)> mConfigChanged;
 
     [[nodiscard]] bool registerImages();
+    [[nodiscard]] bool registerOverlayImages();
+    [[nodiscard]] std::string overlayImageId(std::string_view art,
+                                             const melonrind::IconCrop &crop) const;
     void handleToggle(std::string_view moduleId, bool enabled);
     void handleConfig(std::string_view moduleId, std::string_view key,
                       std::string_view value);

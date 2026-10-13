@@ -163,6 +163,8 @@ std::string describeHudGeometry(const runtime::PlayerSnapshot &snapshot,
     line << " pixel heart=(" << hud.heartOriginX << ',' << hud.heartOriginY
          << ") hunger=(" << hud.hungerOriginX << ',' << hud.hungerOriginY
          << ')';
+    line << " mode=" << runtime::renderModeName(renderer.config().renderMode)
+         << " overlayReady=" << (hud.valid && hud.trusted);
     return line.str();
 }
 
