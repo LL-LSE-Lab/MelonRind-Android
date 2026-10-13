@@ -78,9 +78,12 @@ if (-not $SkipHostTests) {
     $hostDir = Join-Path $SourceDir "build-host"
     Invoke-Checked $cmake -S $SourceDir -B $hostDir -DMELONRIND_BUILD_TESTS=ON
     Invoke-Checked $cmake --build $hostDir --config $BuildType
-    $test = Join-Path $hostDir "$BuildType\melonrind_model_tests.exe"
-    if (-not (Test-Path $test)) { $test = Join-Path $hostDir "melonrind_model_tests.exe" }
-    if (Test-Path $test) { Invoke-Checked $test }
+    foreach ($testName in @("melonrind_model_tests", "melonrind_runtime_tests")) {
+        $test = Join-Path $hostDir "$BuildType\$testName.exe"
+        if (-not (Test-Path $test)) { $test = Join-Path $hostDir "$testName.exe" }
+        if (-not (Test-Path $test)) { throw "Host test executable not found: $testName" }
+        Invoke-Checked $test
+    }
 }
 
 $toolchain = Join-Path $ndkPath "build\cmake\android.toolchain.cmake"
@@ -141,5 +144,13 @@ $zip = Join-Path $DistDir "melonrind-android.zip"
 if (Test-Path $zip) { Remove-Item -LiteralPath $zip -Force }
 Compress-Archive -Path (Join-Path $PackageDir "*") -DestinationPath $zip -Force
 Move-Item -LiteralPath $zip -Destination $archive -Force
+$zipArchive = [System.IO.Compression.ZipFile]::OpenRead($archive)
+$archiveEntries = $zipArchive.Entries.FullName
+$zipArchive.Dispose()
+foreach ($requiredEntry in @("manifest.json", "libmelonrind_android.so", "config/config.json", "config/config.schema.json")) {
+    if ($archiveEntries -notcontains $requiredEntry) {
+        throw "Package root is missing required entry '$requiredEntry': $archive"
+    }
+}
 Write-Host "Built $PackageDir"
 Write-Host "Built $archive"

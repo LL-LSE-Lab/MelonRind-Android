@@ -55,9 +55,21 @@ public:
     void render(const PlayerSnapshot &snapshot, float timeSeconds = 0.0f);
     void clear() noexcept;
 
+    [[nodiscard]] bool diagnosticsEnabled() const noexcept {
+        return mConfig.diagnostics;
+    }
+
     /** Pure command generation hook useful for host-side tests. */
     [[nodiscard]] std::vector<pl::modmenu::DrawCommand> buildCommands(
         const PlayerSnapshot &snapshot, float timeSeconds = 0.0f) const;
+
+    /**
+     * Fixed, data-independent bars.  Submitted whenever diagnostics is enabled
+     * and the real frame would otherwise be empty, so a missing overlay can be
+     * told apart from a missing snapshot.
+     */
+    [[nodiscard]] std::vector<pl::modmenu::DrawCommand> buildDiagnosticCommands(
+        float timeSeconds = 0.0f) const;
 
     [[nodiscard]] std::vector<HudEditorElement> editorElements() const;
     void applyEditorPosition(float x, float y) noexcept;

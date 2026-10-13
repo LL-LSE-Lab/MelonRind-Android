@@ -28,6 +28,34 @@
         "attributeUpdate": { "type": "string" }
       }
     },
+    "abi": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "networkHandlerType": { "type": "string" },
+        "attributeHandlerSlot": { "type": "integer", "minimum": 0 },
+        "hungerShouldRenderOffset": { "type": ["integer", "string"] },
+        "heartBackgroundCountOffset": { "type": ["integer", "string"] },
+        "heartFullCountOffset": { "type": ["integer", "string"] },
+        "heartHalfCountOffset": { "type": ["integer", "string"] },
+        "playerInventoryOffset": { "type": ["integer", "string"] },
+        "playerInventorySelectedOffset": { "type": ["integer", "string"] },
+        "playerInventoryContainerOffset": { "type": ["integer", "string"] },
+        "playerCarriedItemSlot": { "type": "integer", "minimum": 0 },
+        "inventoryGetItemSlot": { "type": "integer", "minimum": 0 },
+        "itemWeakCounterOffset": { "type": ["integer", "string"] },
+        "itemNameStringOffset": { "type": ["integer", "string"] },
+        "itemGetFoodSlot": { "type": "integer", "minimum": 0 },
+        "foodNutritionSlot": { "type": "integer", "minimum": 0 },
+        "foodSaturationSlot": { "type": "integer", "minimum": 0 },
+        "foodAlwaysEatSlot": { "type": "integer", "minimum": 0 },
+        "packetPayloadOffset": { "type": ["integer", "string"] },
+        "attributeStride": { "type": ["integer", "string"] },
+        "hungerRenderRva": { "type": ["integer", "string"] },
+        "attributePacketCompleteDtorRva": { "type": ["integer", "string"] },
+        "attributePacketDeletingDtorRva": { "type": ["integer", "string"] }
+      }
+    },
     "hudVtables": {
       "type": "object",
       "additionalProperties": false,

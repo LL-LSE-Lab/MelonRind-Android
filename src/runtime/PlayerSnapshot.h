@@ -38,6 +38,8 @@ struct PlayerSnapshot {
 
     float health{};
     float maxHealth{20.0f};
+    /** True only when the native adapter read both health values. */
+    bool healthAvailable{};
 
     std::optional<FoodSnapshot> mainHandFood;
     RuleState naturalRegeneration{RuleState::Unknown};
@@ -47,6 +49,8 @@ struct PlayerSnapshot {
     bool creative{};
     bool spectator{};
     bool hudVisible{true};
+    /** Native player mode was read and allows the HUD to be shown. */
+    bool modeAvailable{};
     std::string itemName;
 
     [[nodiscard]] bool hasFiniteNutrition() const noexcept;

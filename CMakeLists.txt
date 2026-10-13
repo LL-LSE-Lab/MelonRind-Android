@@ -27,6 +27,7 @@ if(MELONRIND_BUILD_TESTS AND NOT ANDROID)
 
     add_executable(melonrind_runtime_tests
         tests/runtime_tests.cpp
+        src/runtime/Bedrock12651Adapter.cpp
         src/runtime/PlayerSnapshot.cpp
         src/runtime/SignatureCatalog.cpp
     )
@@ -60,6 +61,7 @@ if(ANDROID)
     add_library(melonrind_android SHARED
         src/mod/ModEntry.cpp
         src/runtime/GameAdapter.cpp
+        src/runtime/Bedrock12651Adapter.cpp
         src/runtime/HudRenderer.cpp
         src/runtime/PlayerSnapshot.cpp
         src/runtime/SignatureCatalog.cpp

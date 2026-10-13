@@ -163,32 +163,121 @@ float HudRenderer::baseY(float contentHeight) const noexcept {
 std::vector<pl::modmenu::DrawCommand> HudRenderer::buildCommands(
     const PlayerSnapshot &rawSnapshot, float timeSeconds) const {
     std::vector<pl::modmenu::DrawCommand> commands;
-    if (!mConfig.enabled || !rawSnapshot.hudVisible || !rawSnapshot.alive) return commands;
+    if (!mConfig.enabled || !rawSnapshot.hudVisible || !rawSnapshot.alive ||
+        rawSnapshot.creative || rawSnapshot.spectator) {
+        return commands;
+    }
+
     auto snapshot = sanitizeSnapshot(rawSnapshot);
-    const float scale = mConfig.scale;
+    struct Row {
+        float value{};
+        float maximum{};
+        std::uint32_t color{};
+        std::string_view image{};
+        std::optional<std::pair<float, float>> preview;
+        std::uint32_t previewColor{};
+        std::optional<std::pair<float, float>> previewUpper;
+        std::uint32_t previewUpperColor{};
+    };
+    std::vector<Row> rows;
+    rows.reserve(3);
+
+    const auto food = snapshot.mainHandFood;
+    std::optional<melonrind::MealPreview> meal;
+    if (food) {
+        meal = melonrind::previewMeal(
+            {snapshot.hunger, snapshot.maxHunger, snapshot.saturation,
+             snapshot.maxSaturation},
+            {food->nutrition, food->saturationModifier, food->alwaysEat,
+             food->uncertainEffects},
+            mConfig.saturationCap == SaturationCap::AttributeMaximum
+                ? melonrind::SaturationCap::AttributeMaximum
+                : melonrind::SaturationCap::HungerAfterEating);
+    }
+
+    rows.push_back({snapshot.hunger, snapshot.maxHunger, 0xd9a441, kFoodImage,
+                    (mConfig.showFoodPreview && meal &&
+                     meal->hungerAfter > meal->hungerBefore)
+                        ? std::optional{std::pair{meal->hungerBefore,
+                                                   meal->hungerAfter}}
+                        : std::nullopt,
+                    0x69c8ff, std::nullopt, 0x9ce6a8});
+
+    if (mConfig.showSaturation && snapshot.saturation) {
+        rows.push_back({*snapshot.saturation, snapshot.maxSaturation, 0xe3b341,
+                        kSaturationImage,
+                        (mConfig.showFoodPreview && meal &&
+                         meal->saturationBefore && meal->saturationAfter &&
+                         *meal->saturationAfter > *meal->saturationBefore)
+                            ? std::optional{std::pair{*meal->saturationBefore,
+                                                       *meal->saturationAfter}}
+                            : std::nullopt,
+                        0x69c8ff, std::nullopt, 0x9ce6a8});
+    }
+
+    if (mConfig.showRegeneration && meal && snapshot.hasFiniteHealth()) {
+        melonrind::RegenContext context{
+            snapshot.health,
+            snapshot.maxHealth,
+            static_cast<melonrind::RuleState>(snapshot.naturalRegeneration),
+            snapshot.peaceful,
+            snapshot.regenerationSuppressed || meal->uncertainEffects,
+            mConfig.estimateUnknownRule,
+        };
+        if (auto regen = melonrind::previewRegeneration(*meal, context)) {
+            if (regen->highHp > 0.0f) {
+                rows.push_back({snapshot.health, snapshot.maxHealth, 0xc75f68,
+                                kRegenImage,
+                                std::optional{std::pair{
+                                    snapshot.health,
+                                    snapshot.health + regen->lowHp}},
+                                0x68db85,
+                                std::nullopt,
+                                0x9ce6a8});
+                if (regen->highHp > regen->lowHp) {
+                    rows.back().previewUpper = std::pair{
+                        snapshot.health + regen->lowHp,
+                        snapshot.health + regen->highHp};
+                }
+            }
+        }
+    }
+
+    if (rows.empty()) return commands;
     constexpr float contentWidthBase = 124.0f;
     constexpr float rowHeightBase = 14.0f;
     constexpr float iconSizeBase = 10.0f;
-    const float surfaceWidth = mSurfaceWidth;
-    const float contentWidth = surfaceWidth > 32.0f
-                                   ? std::min(contentWidthBase * scale,
-                                             surfaceWidth - 32.0f)
-                                   : contentWidthBase * scale;
+    const float scale = mConfig.scale;
     const float rowHeight = rowHeightBase * scale;
     const float iconSize = iconSizeBase * scale;
+    const float contentHeight = rowHeight * static_cast<float>(rows.size());
+    const float surfaceWidth = mSurfaceWidth;
+    const float contentWidth = surfaceWidth > 0.0f
+                                   ? std::min(contentWidthBase * scale,
+                                             std::max(1.0f, surfaceWidth - 8.0f))
+                                   : contentWidthBase * scale;
+    float x = baseX(contentWidth);
+    float y = baseY(contentHeight);
+    if (surfaceWidth > 0.0f) {
+        x = std::clamp(x, 0.0f, std::max(0.0f, surfaceWidth - contentWidth));
+    }
+    if (mSurfaceHeight > 0.0f) {
+        y = std::clamp(y, 0.0f, std::max(0.0f, mSurfaceHeight - contentHeight));
+    }
     const float alpha = mConfig.pulse
                             ? mConfig.opacity * (0.78f + 0.22f *
                                                    std::sin(timeSeconds * 4.0f))
                             : mConfig.opacity;
-    const float x = baseX(contentWidth);
-    float y = baseY(rowHeight * 4.0f);
+    const float barX = x + iconSize + 5.0f * scale;
+    const float barWidth = std::max(1.0f, contentWidth - iconSize - 5.0f * scale);
 
-    auto addBar = [&](float value, float maximum, std::uint32_t rgb,
-                      std::string_view imageId, bool show) {
-        if (!show || !std::isfinite(value) || !std::isfinite(maximum) || maximum <= 0.0f) {
-            return;
+    for (auto const &row : rows) {
+        if (!std::isfinite(row.value) || !std::isfinite(row.maximum) ||
+            row.maximum <= 0.0f) {
+            y += rowHeight;
+            continue;
         }
-        const float fraction = std::clamp(value / maximum, 0.0f, 1.0f);
+        const float fraction = std::clamp(row.value / row.maximum, 0.0f, 1.0f);
         commands.push_back({.type = pl::modmenu::DrawCommandType::Image,
                              .x = x,
                              .y = y + (rowHeight - iconSize) * 0.5f,
@@ -197,78 +286,103 @@ std::vector<pl::modmenu::DrawCommand> HudRenderer::buildCommands(
                              .color = withAlpha(0xffffff, alpha),
                              .text = {},
                              .fontId = {},
-                             .imageId = std::string(imageId)});
+                             .imageId = std::string(row.image)});
         commands.push_back({.type = pl::modmenu::DrawCommandType::RectFilled,
-                             .x = x + iconSize + 5.0f * scale,
+                             .x = barX,
                              .y = y + 3.0f * scale,
-                             .w = contentWidth - iconSize - 5.0f * scale,
+                             .w = barWidth,
                              .h = 8.0f * scale,
                              .color = withAlpha(0x26303a, alpha * 0.7f),
                              .text = {},
                              .fontId = {},
                              .imageId = {}});
         commands.push_back({.type = pl::modmenu::DrawCommandType::RectFilled,
-                             .x = x + iconSize + 5.0f * scale,
+                             .x = barX,
                              .y = y + 3.0f * scale,
-                             .w = (contentWidth - iconSize - 5.0f * scale) * fraction,
+                             .w = barWidth * fraction,
                              .h = 8.0f * scale,
-                             .color = withAlpha(rgb, alpha),
+                             .color = withAlpha(row.color, alpha),
                              .text = {},
                              .fontId = {},
                              .imageId = {}});
+        auto drawPreview = [&](std::optional<std::pair<float, float>> range,
+                               std::uint32_t color) {
+            if (!range || range->second <= range->first) return;
+            const float start = std::clamp(range->first / row.maximum, 0.0f, 1.0f);
+            const float end = std::clamp(range->second / row.maximum, 0.0f, 1.0f);
+            if (end <= start) return;
+            commands.push_back({.type = pl::modmenu::DrawCommandType::RectFilled,
+                                 .x = barX + barWidth * start,
+                                 .y = y + 3.0f * scale,
+                                 .w = barWidth * (end - start),
+                                 .h = 8.0f * scale,
+                                 .color = withAlpha(color, alpha),
+                                 .text = {},
+                                 .fontId = {},
+                                 .imageId = {}});
+        };
+        drawPreview(row.preview, row.previewColor);
+        drawPreview(row.previewUpper, row.previewUpperColor);
         y += rowHeight;
-    };
+    }
+    return commands;
+}
 
-    addBar(snapshot.hunger, snapshot.maxHunger, 0xd9a441, kFoodImage, true);
-    if (mConfig.showSaturation && snapshot.saturation) {
-        addBar(*snapshot.saturation, snapshot.maxSaturation, 0xe3b341,
-               kSaturationImage, true);
+std::vector<pl::modmenu::DrawCommand> HudRenderer::buildDiagnosticCommands(
+    float timeSeconds) const {
+    // Three fixed, fully filled rows.  Unlike buildCommands this ignores the
+    // snapshot entirely, so it proves the renderer, the image registrations and
+    // the launcher overlay bridge are alive even when no usable player state
+    // was read.
+    std::vector<pl::modmenu::DrawCommand> commands;
+    constexpr float contentWidthBase = 124.0f;
+    constexpr float rowHeightBase = 14.0f;
+    constexpr float iconSizeBase = 10.0f;
+    const float scale = mConfig.scale;
+    const float rowHeight = rowHeightBase * scale;
+    const float iconSize = iconSizeBase * scale;
+    const float contentHeight = rowHeight * 3.0f;
+    const float surfaceWidth = mSurfaceWidth;
+    const float contentWidth = surfaceWidth > 0.0f
+                                   ? std::min(contentWidthBase * scale,
+                                             std::max(1.0f, surfaceWidth - 8.0f))
+                                   : contentWidthBase * scale;
+    float x = baseX(contentWidth);
+    float y = baseY(contentHeight);
+    if (surfaceWidth > 0.0f) {
+        x = std::clamp(x, 0.0f, std::max(0.0f, surfaceWidth - contentWidth));
     }
-    if (mConfig.showFoodPreview && snapshot.mainHandFood) {
-        const auto &food = *snapshot.mainHandFood;
-        melonrind::Food modelFood{
-            food.nutrition,
-            food.saturationModifier,
-            food.alwaysEat,
-            food.uncertainEffects,
-        };
-        melonrind::Nutrition nutrition{
-            snapshot.hunger,
-            snapshot.maxHunger,
-            snapshot.saturation,
-            snapshot.maxSaturation,
-        };
-        auto meal = melonrind::previewMeal(
-            nutrition,
-            modelFood,
-            mConfig.saturationCap == SaturationCap::AttributeMaximum
-                ? melonrind::SaturationCap::AttributeMaximum
-                : melonrind::SaturationCap::HungerAfterEating);
-        if (meal) {
-            addBar(meal->hungerAfter, snapshot.maxHunger, 0x69c8ff,
-                   kFoodImage, true);
-            if (mConfig.showSaturation && meal->saturationAfter) {
-                addBar(*meal->saturationAfter, snapshot.maxSaturation, 0x69c8ff,
-                       kSaturationImage, true);
-            }
-            if (mConfig.showRegeneration && snapshot.hasFiniteHealth()) {
-                melonrind::RegenContext context{
-                    snapshot.health,
-                    snapshot.maxHealth,
-                    static_cast<melonrind::RuleState>(snapshot.naturalRegeneration),
-                    snapshot.peaceful,
-                    snapshot.regenerationSuppressed,
-                    mConfig.estimateUnknownRule,
-                };
-                if (auto regen = melonrind::previewRegeneration(*meal, context)) {
-                    addBar(snapshot.health + regen->lowHp, snapshot.maxHealth,
-                           0x68db85, kRegenImage, regen->lowHp > 0.0f);
-                    addBar(snapshot.health + regen->highHp, snapshot.maxHealth,
-                           0x9ce6a8, kRegenImage, regen->highHp > regen->lowHp);
-                }
-            }
-        }
+    if (mSurfaceHeight > 0.0f) {
+        y = std::clamp(y, 0.0f, std::max(0.0f, mSurfaceHeight - contentHeight));
     }
+    const float alpha = mConfig.opacity;
+    const float barX = x + iconSize + 5.0f * scale;
+    const float barWidth = std::max(1.0f, contentWidth - iconSize - 5.0f * scale);
+    constexpr std::uint32_t colors[3] = {0xe3b341, 0x69c8ff, 0xc75f68};
+    constexpr std::string_view images[3] = {
+        kSaturationImage, kFoodImage, kRegenImage};
+    for (int row = 0; row < 3; ++row) {
+        commands.push_back({.type = pl::modmenu::DrawCommandType::Image,
+                            .x = x,
+                            .y = y + (rowHeight - iconSize) * 0.5f,
+                            .w = iconSize,
+                            .h = iconSize,
+                            .color = withAlpha(0xffffff, alpha),
+                            .text = {},
+                            .fontId = {},
+                            .imageId = std::string(images[row])});
+        commands.push_back({.type = pl::modmenu::DrawCommandType::RectFilled,
+                            .x = barX,
+                            .y = y + 3.0f * scale,
+                            .w = barWidth,
+                            .h = 8.0f * scale,
+                            .color = withAlpha(colors[row], alpha),
+                            .text = {},
+                            .fontId = {},
+                            .imageId = {}});
+        y += rowHeight;
+    }
+    (void)timeSeconds;
     return commands;
 }
 
@@ -277,10 +391,20 @@ void HudRenderer::render(const PlayerSnapshot &snapshot, float timeSeconds) {
     const auto surface = pl::modmenu::getHudSurfaceSize();
     setSurfaceSize(surface.width, surface.height);
     if (!mConfig.enabled || !snapshot.hudVisible) {
-        clear();
+        // Diagnostics keeps a fixed marker on screen instead of clearing, so a
+        // suppressed HUD is immediately distinguishable from a broken one.
+        if (mConfig.enabled && mConfig.diagnostics) {
+            pl::modmenu::submitDrawCommands(kModuleId,
+                                            buildDiagnosticCommands(timeSeconds));
+        } else {
+            clear();
+        }
         return;
     }
     auto commands = buildCommands(snapshot, timeSeconds);
+    if (commands.empty() && mConfig.diagnostics) {
+        commands = buildDiagnosticCommands(timeSeconds);
+    }
     pl::modmenu::submitDrawCommands(kModuleId, commands);
 }
 
@@ -292,7 +416,7 @@ void HudRenderer::clear() noexcept {
 
 std::vector<HudEditorElement> HudRenderer::editorElements() const {
     const float width = 124.0f * mConfig.scale;
-    const float height = 14.0f * mConfig.scale * 4.0f;
+    const float height = 14.0f * mConfig.scale * 3.0f;
     return {{std::string(kModuleId), "MelonRind HUD", baseX(width), baseY(height),
              width, height, 0x07U, 8.0f}};
 }

@@ -20,5 +20,29 @@
     "hungerRenderSlot": 17,
     "heartRenderSlot": 17
   },
+  "abi": {
+    "networkHandlerType": "20ClientNetworkHandler",
+    "attributeHandlerSlot": 144,
+    "hungerShouldRenderOffset": "0x11",
+    "heartBackgroundCountOffset": "0x20",
+    "heartFullCountOffset": "0x98",
+    "heartHalfCountOffset": "0xb0",
+    "playerInventoryOffset": "0x5e8",
+    "playerInventorySelectedOffset": "0x10",
+    "playerInventoryContainerOffset": "0x38",
+    "playerCarriedItemSlot": 78,
+    "inventoryGetItemSlot": 7,
+    "itemWeakCounterOffset": "0x8",
+    "itemNameStringOffset": "0xf0",
+    "itemGetFoodSlot": 26,
+    "foodNutritionSlot": 2,
+    "foodSaturationSlot": 3,
+    "foodAlwaysEatSlot": 4,
+    "packetPayloadOffset": "0x30",
+    "attributeStride": "0x58",
+    "hungerRenderRva": "0x9673048",
+    "attributePacketCompleteDtorRva": "0xcf55560",
+    "attributePacketDeletingDtorRva": "0xcf555d4"
+  },
   "notes": "Primary development target. Populate only after validating against the exact shipped ARM64 build."
 }

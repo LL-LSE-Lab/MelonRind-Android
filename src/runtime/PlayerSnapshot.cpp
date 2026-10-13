@@ -20,7 +20,7 @@ bool PlayerSnapshot::hasFiniteNutrition() const noexcept {
 }
 
 bool PlayerSnapshot::hasFiniteHealth() const noexcept {
-    return finiteIn(maxHealth, 1.0f, 2000.0f) &&
+    return healthAvailable && finiteIn(maxHealth, 1.0f, 2000.0f) &&
            finiteIn(health, 0.0f, maxHealth);
 }
 
@@ -51,8 +51,12 @@ PlayerSnapshot sanitizeSnapshot(PlayerSnapshot snapshot) noexcept {
             snapshot.mainHandFood.reset();
         }
     }
-    if (!snapshot.alive || snapshot.health <= 0.0f) {
+    if (!snapshot.alive || (snapshot.healthAvailable && snapshot.health <= 0.0f)) {
         snapshot.mainHandFood.reset();
+    }
+    if (!snapshot.healthAvailable) {
+        snapshot.health = 0.0f;
+        snapshot.maxHealth = 20.0f;
     }
     return snapshot;
 }
