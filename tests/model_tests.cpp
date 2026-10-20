@@ -115,7 +115,9 @@ int main() {
     full.surfaceWidth = 3168;
     full.surfaceHeight = 1440;
     auto scale = estimateHudUnitScale(full);
-    check(scale.valid && scale.consistent && near(scale.combined, 6.0f),
+    check(scale.valid && scale.consistent &&
+              scale.layout == HudLayout::Classic &&
+              near(scale.combined, 6.0f),
           "calibration recovers the measured 6.0 px/unit at 100% UI scale");
     check(near(scale.fromWidth, 6.0f) && near(scale.fromHeight, 6.0f),
           "both calibration baselines agree at 100% UI scale");
@@ -124,7 +126,8 @@ int main() {
     scaled.heartX = 216;
     scaled.hungerY = scaled.heartY = 247;
     scale = estimateHudUnitScale(scaled);
-    check(scale.valid && scale.consistent && scale.combined > 4.98f &&
+    check(scale.valid && scale.consistent &&
+              scale.layout == HudLayout::Classic && scale.combined > 4.98f &&
               scale.combined < 5.01f,
           "calibration tracks the UI scale change to 5.0 px/unit");
     HudCalibrationInput missing = full;
@@ -135,6 +138,52 @@ int main() {
     degenerate.surfaceHeight = nan;
     check(!estimateHudUnitScale(degenerate).valid,
           "calibration rejects a non-finite surface size");
+
+    // Pocket UI: `hud_screen.json`'s `not_centered_gui_elements` anchors the
+    // same renderer controls two units inside the top corners.  The cached
+    // position is the 1-unit-wide control's left edge, so the hunger origin is
+    // virtualWidth - 3 and the existing width baseline (with its 1-unit
+    // asymmetry) still recovers the virtual width.  Only the Classic
+    // bottom-edge baseline is invalid, so the detector must use `fromWidth`.
+    HudCalibrationInput pocket{};
+    pocket.hungerOrigin = pocket.heartOrigin = true;
+    pocket.heartX = 2;
+    pocket.heartY = 2;
+    pocket.hungerX = 477;
+    pocket.hungerY = 2;
+    pocket.surfaceWidth = 2400;
+    pocket.surfaceHeight = 1080;
+    auto pocketScale = estimateHudUnitScale(pocket);
+    check(pocketScale.valid && pocketScale.consistent &&
+              pocketScale.layout == HudLayout::Pocket &&
+              near(pocketScale.combined, 5.0f),
+          "pocket top-corner layout recovers 5.0 px/unit from the width baseline");
+    check(near(pocketScale.fromWidth, 5.0f) && pocketScale.fromHeight > 20.0f,
+          "the rejected classic baseline is retained for diagnostics");
+
+    auto pocketWide = pocket;
+    pocketWide.hungerX = 478;
+    pocketScale = estimateHudUnitScale(pocketWide);
+    check(pocketScale.valid && pocketScale.layout == HudLayout::Pocket &&
+              pocketScale.combined > 4.98f && pocketScale.combined < 5.0f,
+          "a one-unit anchor difference stays inside the pocket width tolerance");
+
+    auto topButCentred = pocket;
+    topButCentred.heartX = 200;
+    topButCentred.hungerX = 400;
+    scale = estimateHudUnitScale(topButCentred);
+    check(!scale.consistent && scale.layout == HudLayout::Unknown,
+          "top-row bars in the middle are not mistaken for pocket UI");
+
+    auto pocketRowSkew = pocket;
+    pocketRowSkew.hungerY = 12;
+    check(estimateHudUnitScale(pocketRowSkew).layout == HudLayout::Unknown,
+          "pocket detection requires both bars on the same top row");
+
+    auto pocketMissingOrigin = pocket;
+    pocketMissingOrigin.heartOrigin = false;
+    check(!estimateHudUnitScale(pocketMissingOrigin).valid,
+          "pocket calibration still needs both bar origins");
 
     // Overlay art: a 9x9 sprite with a distinct alpha per column, so the crop
     // mapping is checkable pixel by pixel.

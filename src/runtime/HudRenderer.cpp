@@ -108,6 +108,7 @@ HudRenderer::HudGeometry HudRenderer::geometry(
     if (!std::isfinite(unitScale) || unitScale <= 0.0f) return result;
 
     result.unitScale = unitScale;
+    result.layout = estimate.layout;
     result.calibrated = estimate.valid;
     result.trusted = (estimate.valid && estimate.consistent) || pinned;
     if (snapshot.hungerBar.available) {

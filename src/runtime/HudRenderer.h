@@ -1,5 +1,6 @@
 #pragma once
 
+#include "model/HudTransform.h"
 #include "model/OverlayPlan.h"
 #include "runtime/Config.h"
 #include "runtime/PlayerSnapshot.h"
@@ -87,6 +88,8 @@ public:
          * wrong place, while the panel stays correct either way.
          */
         bool trusted{};
+        /** Which vanilla layout the origins were recognised as. */
+        melonrind::HudLayout layout{melonrind::HudLayout::Unknown};
         float unitScale{};
         float hungerOriginX{};
         float hungerOriginY{};

@@ -5,6 +5,7 @@
 
 #include <pl/Config.hpp>
 #include <pl/Mod.hpp>
+#include <pl/ModMenu.hpp>
 
 #include <cstdlib>
 #include <atomic>
@@ -119,10 +120,13 @@ std::string describeIcons(const runtime::PlayerSnapshot &snapshot,
 /**
  * One-line record of the calibrated HUD geometry.
  *
- * `unitScale` is what the overlay multiplies UI units by; `fromWidth` and
- * `fromHeight` are the two independent estimates it is fitted from, so a log
- * where they disagree is the signal that the HUD layout is no longer the one
- * the constants describe (the overlay then falls back to the configured value).
+ * `unitScale` is what the overlay multiplies UI units by; `layout` says which
+ * vanilla arrangement the origins were recognised as.  `fromWidth` and
+ * `fromHeight` are the two independent estimates the Classic fit uses, so a log
+ * where they disagree is the signal that the HUD is no longer the layout the
+ * constants describe.  Pocket keeps `fromHeight` at its (rejected) Classic
+ * value and uses `fromWidth`; the overlay then falls back to the configured
+ * scale only when no layout is recognised.
  */
 std::string describeHudGeometry(const runtime::PlayerSnapshot &snapshot,
                                 const runtime::HudRenderer &renderer) {
@@ -155,6 +159,7 @@ std::string describeHudGeometry(const runtime::PlayerSnapshot &snapshot,
     }
     line << " surface=" << renderer.surfaceWidth() << 'x'
          << renderer.surfaceHeight();
+    line << " layout=" << melonrind::hudLayoutName(estimate.layout);
     line << " unitScale=" << hud.unitScale << " auto=" << estimate.valid
          << " fromWidth=" << estimate.fromWidth
          << " fromHeight=" << estimate.fromHeight
@@ -229,6 +234,12 @@ public:
             mAdapter.setHudProbeEnabled(mConfig->value().diagnosticMarkers);
             mAdapter.setSnapshotCallback([this](const runtime::PlayerSnapshot &snapshot) {
                 if (mEnabled.load(std::memory_order_relaxed)) {
+                    // The Java overlay view reports its size after the first
+                    // game frame.  Refresh it before the diagnostic lines so
+                    // the first usable icon record carries the real surface
+                    // instead of the initial 0x0.
+                    const auto surface = pl::modmenu::getHudSurfaceSize();
+                    mRenderer.setSurfaceSize(surface.width, surface.height);
                     const int index =
                         mLoggedSnapshots.fetch_add(1, std::memory_order_relaxed);
                     // Trace the first few frames unconditionally, then keep a
@@ -278,11 +289,18 @@ public:
                         snapshot.icons.heartCount != 0;
                     // The first usable icon layout is always recorded, even
                     // with both diagnostic toggles off: it is the measurement
-                    // that calibrates the overlay transform.  After that the
-                    // line only repeats every two seconds while the calibration
-                    // markers are enabled.
+                    // that calibrates the overlay transform.  The geometry line
+                    // is repeated once the overlay surface size becomes known,
+                    // because the first snapshot can precede the Java view's
+                    // onSizeChanged().  After that the lines only repeat every
+                    // two seconds while the calibration markers are enabled.
                     const bool firstIcons = iconsPresent &&
                         !mLoggedIcons.exchange(true, std::memory_order_relaxed);
+                    const bool surfaceReady =
+                        mRenderer.surfaceWidth() > 0.0f &&
+                        mRenderer.surfaceHeight() > 0.0f;
+                    const bool firstCalibration = iconsPresent && surfaceReady &&
+                        !mLoggedCalibration.exchange(true, std::memory_order_relaxed);
                     const bool heartbeatIcons =
                         iconsPresent && mRenderer.markerModeEnabled() &&
                         mIconHeartbeat.due();
@@ -290,6 +308,8 @@ public:
                         mDiagnostics.write(describeIcons(
                             snapshot, mRenderer.surfaceWidth(),
                             mRenderer.surfaceHeight()));
+                    }
+                    if (firstIcons || firstCalibration || heartbeatIcons) {
                         mDiagnostics.write(describeHudGeometry(snapshot, mRenderer));
                         // The transform probe only exists while the calibration
                         // markers are enabled; it records where the renderers
@@ -409,6 +429,7 @@ public:
             mLoggedFood = false;
             mLoggedAttributeHook = false;
             mLoggedIcons = false;
+            mLoggedCalibration = false;
             mDiagHeartbeat.reset();
             mIconHeartbeat.reset();
             mEnabled.store(true, std::memory_order_relaxed);
@@ -429,6 +450,7 @@ public:
             mLoggedFood = false;
             mLoggedAttributeHook = false;
             mLoggedIcons = false;
+            mLoggedCalibration = false;
             mIconHeartbeat.reset();
             mRenderer.clear();
             mRenderer.unregisterModule();
@@ -469,6 +491,7 @@ private:
     std::atomic_bool mLoggedFood{};
     std::atomic_bool mLoggedAttributeHook{};
     std::atomic_bool mLoggedIcons{};
+    std::atomic_bool mLoggedCalibration{};
 };
 
 } // namespace

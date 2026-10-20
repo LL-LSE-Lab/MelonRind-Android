@@ -7,8 +7,9 @@ LeviLaunchroid. The first development release is `0.1.0-dev.1`.
 
 - ARM64 Android native mod using `preloader-android`.
 - Minecraft Bedrock `1.26.50.x`, `1.26.51.x` and `1.26.52.x` manifest gates.
-- AppleSkin-style overlay: saturation, held-food hunger/saturation preview and
-  regeneration preview painted directly over the vanilla bars.
+- AppleSkin-style overlay for both Classic and Pocket UI: saturation, held-food
+  hunger/saturation preview and regeneration preview painted directly over the
+  vanilla bars (bottom-centre in Classic, top corners in Pocket UI).
 - Compact panel output kept as a fallback when the calibrated bar geometry is
   not available.
 - Mod Menu configuration and draw-command HUD output.
@@ -131,6 +132,41 @@ Measured on-device over a 3168x1440 overlay:
 Both runs agree with the rendered icon rows to within about one pixel, and the
 estimate follows the setting without any per-device constant.
 
+### Pocket UI layout
+
+Pocket UI reuses the same `::HudHungerRenderer` and `::HudHeartRenderer`
+controls, but `hud_screen.json` places them in `not_centered_gui_elements`
+instead of the bottom-centre panel:
+
+| control | anchor | offset |
+| --- | --- | --- |
+| heart | top-left | `[2, 2]` |
+| hunger | top-right | `[-2, 2]` |
+
+Both custom controls are one unit wide and `::UIControl::mCachedPosition` is
+the control's left edge, so the hunger origin sits at `virtual_width - 3` while
+its 9-unit icon extends one unit further right. The width baseline therefore
+still sums to the virtual width (`heart_x + hunger_x + 1`), but the Classic
+bottom margin does not apply: at 2400x1080 the Classic fit estimates about 25
+px/unit vertically against 5 px/unit horizontally and is rejected.
+
+The calibration recognises the Pocket arrangement from the origins themselves
+(both bars on the same row within one unit, close to the two side edges and
+within a small fraction of the width from the top) and, when the Classic
+two-baseline fit is inconsistent, uses the width estimate alone. Classification
+and both baselines are recorded in `melonrind-diag.log` as `layout=`,
+`fromWidth=`, `fromHeight=` and `consistent=`.
+
+Measured on-device over a 2400x1080 overlay:
+
+| UI profile | owner origins (units) | estimated `unitScale` | icon pitch |
+| --- | --- | --- | --- |
+| Pocket | heart `(2, 2)`, hunger `(477, 2)` | 5.00 | 40 px for 8 units |
+
+The rejected Classic baseline is `fromHeight = 1080 / (2 + 41) = 25.12`; the
+logged line is therefore `layout=pocket ... fromWidth=5.00 fromHeight=25.12
+consistent=1 trusted=1`.
+
 Turn on `diagnosticMarkers` to re-verify: the toggle suppresses the regular
 panel, draws a cyan/magenta cross at each *raw* icon origin (which is what makes
 the unit space visible) and a calibrated marker at each computed pixel origin -
@@ -208,10 +244,11 @@ describe; `diagnosticMarkers` and `diagnostics` are the troubleshooting toggles.
   a wide-gamut display shifts saturated colours slightly (pure sRGB yellow
   `#FFFF00` is captured as `(255, 255, 84)`), so the overlay's gold reads a
   little softer than the source art. The vanilla OpenGL HUD is unaffected.
-- `unitScale` auto-calibration assumes the vanilla bar layout documented above.
-  A resource pack that moves the bars makes the two baselines disagree; the log
-  then reports `consistent=0` and the overlay falls back to the panel (or uses
-  the `unitScale` value pinned in the configuration).
+- `unitScale` auto-calibration recognises the two vanilla layouts documented
+  above. A resource pack that moves either bar makes the matching baseline
+  fail; the log then reports `layout=unknown` and `consistent=0`, and the
+  overlay falls back to the panel (or uses the `unitScale` value pinned in the
+  configuration).
 
 Saturation is read from `UpdateAttributesPacket` in the packet's destructors
 (both the complete-object and deleting entries, because `std::make_shared`
