@@ -4,12 +4,15 @@
 #include "model/OverlayPlan.h"
 #include "model/Preview.h"
 #include "model/SaturationObservation.h"
+#include "runtime/generated/OverlayArt.h"
 
 #include <array>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <span>
+#include <string_view>
 
 namespace {
 int checks = 0;
@@ -158,6 +161,57 @@ int main() {
               cropOverlayArt(art, nan, 1.0f, 6).empty(),
           "degenerate crops produce no image");
 
+    // Registration hands the bytes to an ARGB_8888 bitmap that Android blends as
+    // premultiplied, so a straight-alpha colour may only survive where it is
+    // covered by the pixel's alpha.  The crop itself keeps the sprite's colours;
+    // premultiplyRgba is what makes them safe to register.
+    std::array<unsigned char, 9 * 9 * 4> straightArt{};
+    for (int y = 0; y < 9; ++y) {
+        for (int x = 0; x < 9; ++x) {
+            auto const offset = static_cast<std::size_t>((y * 9 + x) * 4);
+            straightArt[offset + 0] = 255;
+            straightArt[offset + 1] = 248;
+            straightArt[offset + 2] = 225;
+            straightArt[offset + 3] = (x == 4 && y == 4) ? 255 : 0;
+        }
+    }
+    auto straightCrop = cropOverlayArt(straightArt, 0.0f, 1.0f, 6);
+    check(straightCrop.pixels[0] == 255 && straightCrop.pixels[3] == 0,
+          "a crop keeps the sprite's straight-alpha colours");
+    premultiplyRgba(straightCrop.pixels);
+    check(straightCrop.pixels[0] == 0 && straightCrop.pixels[1] == 0 &&
+              straightCrop.pixels[2] == 0 && straightCrop.pixels[3] == 0,
+          "premultiplying clears the colour of a transparent pixel");
+    bool outlineSurvived = false;
+    for (std::size_t i = 0; i + 3 < straightCrop.pixels.size(); i += 4) {
+        check(straightCrop.pixels[i] <= straightCrop.pixels[i + 3] &&
+                  straightCrop.pixels[i + 1] <= straightCrop.pixels[i + 3] &&
+                  straightCrop.pixels[i + 2] <= straightCrop.pixels[i + 3],
+              "premultiplied pixels never carry colour above their alpha");
+        if (straightCrop.pixels[i + 3] == 255) outlineSurvived = true;
+    }
+    check(outlineSurvived, "premultiplying keeps the opaque art");
+
+    std::array<unsigned char, 4 * 4> premul{
+        255, 128, 0, 255,    // opaque: unchanged
+        255, 255, 255, 0,    // transparent: becomes transparent black
+        200, 200, 200, 128,  // half transparent: scaled and rounded
+        10, 20, 30, 1};      // almost transparent: rounds down to zero
+    premultiplyRgba(premul);
+    check(premul[0] == 255 && premul[1] == 128 && premul[2] == 0 && premul[3] == 255,
+          "opaque premultiplied pixels are unchanged");
+    check(premul[4] == 0 && premul[5] == 0 && premul[6] == 0 && premul[7] == 0,
+          "a transparent colour becomes transparent black");
+    check(premul[8] == 100 && premul[9] == 100 && premul[10] == 100 &&
+              premul[11] == 128,
+          "a semi-transparent colour is scaled by its alpha");
+    check(premul[12] == 0 && premul[13] == 0 && premul[14] == 0 && premul[15] == 1,
+          "rounding keeps premultiplied components inside their alpha");
+    std::array<unsigned char, 6> trailing{255, 255, 255, 0, 9, 9};
+    premultiplyRgba(trailing);
+    check(trailing[0] == 0 && trailing[4] == 9 && trailing[5] == 9,
+          "a trailing partial pixel is ignored");
+
     // Crop quantisation has to stay inside the pre-registered set, otherwise the
     // overlay would reference an image id the launcher never received.
     const auto registry = registeredIconCrops();
@@ -184,6 +238,38 @@ int main() {
             check(crop.left >= left - 0.26f && crop.right <= right + 0.26f,
                   "quantisation stays within a quarter icon of the request");
         }
+    }
+
+    // The embedded sprites are straight alpha.  The food preview is the worst
+    // case: it recolours every pixel, so its fully transparent pixels carry a
+    // bright pale colour, which is what leaked on screen as a solid rectangle
+    // instead of an outline.  Every crop the renderer can register is converted
+    // before registration, so the premultiplied invariant has to hold for the
+    // real art too.
+    const std::pair<std::string_view, std::span<const unsigned char>> embedded[3] = {
+        {"saturation", melonrind::generated::kSaturationArt},
+        {"food preview", melonrind::generated::kFoodPreviewArt},
+        {"regeneration", melonrind::generated::kRegenArt},
+    };
+    for (auto const &art : embedded) {
+        const auto pixels = art.second;
+        bool anyOpaque = false;
+        bool anyTransparent = false;
+        for (auto const &crop : registry) {
+            auto image = cropOverlayArt(pixels, crop.left, crop.right);
+            check(!image.empty(), "every registered crop of the embedded art is drawn");
+            premultiplyRgba(image.pixels);
+            for (std::size_t i = 0; i + 3 < image.pixels.size(); i += 4) {
+                const unsigned alpha = image.pixels[i + 3];
+                check(image.pixels[i] <= alpha && image.pixels[i + 1] <= alpha &&
+                          image.pixels[i + 2] <= alpha,
+                      "registered crops are premultiplied");
+                anyOpaque = anyOpaque || alpha == 255;
+                anyTransparent = anyTransparent || alpha == 0;
+            }
+        }
+        check(anyOpaque && anyTransparent,
+              "the embedded art keeps its opaque outline and its transparent holes");
     }
 
     // Planned fills: the hunger bar fills from its right end, the health bar

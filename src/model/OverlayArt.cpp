@@ -49,4 +49,20 @@ RgbaImage cropOverlayArt(std::span<const unsigned char> art, float left,
     return result;
 }
 
+void premultiplyRgba(std::span<unsigned char> pixels) noexcept {
+    const std::size_t count = pixels.size() / 4;
+    for (std::size_t index = 0; index < count; ++index) {
+        const std::size_t offset = index * 4;
+        const unsigned int alpha = pixels[offset + 3];
+        if (alpha == 255) continue;
+        for (std::size_t channel = 0; channel < 3; ++channel) {
+            // Round to nearest; (255 * 255 + 127) / 255 == 255 keeps the
+            // premultiplied invariant `component <= alpha` for every input.
+            const unsigned int value = pixels[offset + channel];
+            pixels[offset + channel] = static_cast<unsigned char>(
+                (value * alpha + 127U) / 255U);
+        }
+    }
+}
+
 } // namespace melonrind

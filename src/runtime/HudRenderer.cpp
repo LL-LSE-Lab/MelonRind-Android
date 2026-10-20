@@ -59,6 +59,9 @@ std::vector<unsigned char> iconPixels(std::uint32_t rgb) {
             pixels[offset + 3] = inside ? 0xff : 0x00;
         }
     }
+    // The launcher's bitmap is premultiplied: a colour left in the transparent
+    // corners would be added to the screen instead of staying invisible.
+    melonrind::premultiplyRgba(pixels);
     return pixels;
 }
 
@@ -170,9 +173,12 @@ bool HudRenderer::registerOverlayImages() {
     };
     for (auto const &[art, pixels] : arts) {
         for (auto const &crop : crops) {
-            const auto image =
+            auto image =
                 melonrind::cropOverlayArt(pixels, crop.left, crop.right);
             if (image.empty()) return false;
+            // The embedded art is straight alpha; the launcher's bitmap is
+            // premultiplied and copies the bytes verbatim, so convert here.
+            melonrind::premultiplyRgba(image.pixels);
             if (!pl::modmenu::registerImage(overlayImageId(art, crop),
                                             image.pixels, image.width,
                                             image.height)) {

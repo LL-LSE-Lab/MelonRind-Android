@@ -169,6 +169,16 @@ each of them once per quantised crop:
 AppleSkin quantises the same way: its saturation sheet ships four pre-cropped
 variants per icon and its preview steps in half icons.
 
+The sprites are stored as straight alpha, but the launcher registers an image by
+copying the bytes into an `ARGB_8888` bitmap, which Android blends as
+*premultiplied*. A colour left in a fully transparent pixel is therefore
+invalid premultiplied data and gets added to the screen instead of staying
+invisible: on devices that keep the value, the food preview rendered as a solid
+pale rectangle (with white seams where two crops met) instead of an outline.
+`melonrind::premultiplyRgba()` converts every overlay crop and every panel icon
+immediately before `registerImage`, so the art is correct under either
+interpretation. Do not skip it when adding a new sprite.
+
 **What is painted.**
 
 | bar | range | art | alpha |
