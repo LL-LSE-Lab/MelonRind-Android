@@ -1,7 +1,7 @@
 # MelonRind Android
 
 MelonRind Android is a client-side AppleSkin-style nutrition HUD for
-LeviLaunchroid. The first development release is `0.1.0-dev.1`.
+LeviLaunchroid. The current release is `0.1.0`.
 
 ## Current scope
 
